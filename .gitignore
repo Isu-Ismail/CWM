@@ -1,3 +1,6 @@
 venv/
 cwm.egg-info/
 __pycache__/
+test_bank/
+run_logs.txt
+run_tests.bat
