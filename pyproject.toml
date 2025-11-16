@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cwm"
+version = "0.1.0"
+description = "Command Watch Manager"
+authors = [{name = "Your Name"}]
+dependencies = ["click"]
+
+[project.scripts]
+cwm = "cwm.cli:cli"
