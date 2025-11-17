@@ -3,14 +3,15 @@ import click
 from difflib import get_close_matches
 from pathlib import Path
 
+# Import the new, specific helpers
 from .utils import (
     has_write_permission,
-    inside_cwm_bank,
     safe_create_cwm_folder,
-    find_cwm_folders
+    is_path_literally_inside_bank  # <-- The only check we need
 )
 
 from .save_cmd import save_command   # <-- Import SAVE COMMAND
+from .backup_cmd import backup_cmd # <-- Import backup COmmand
 
 
 CWM_BANK = ".cwm"
@@ -21,21 +22,17 @@ GLOBAL_CWM_BANK = Path(os.getenv("APPDATA")) / "cwm"
 # Custom Click Group with closest-command suggestion
 # ============================================================
 class CwmGroup(click.Group):
-
+    # (This class is unchanged and correct)
     def get_command(self, ctx, cmd_name):
         """
         Override click.Group.get_command to provide suggestions
         for unknown commands.
         """
-        # Try to get command normally
         rv = click.Group.get_command(self, ctx, cmd_name)
         if rv is not None:
             return rv
-
-        # Unknown command → suggest closest one
         possibilities = list(self.commands.keys())
         close = get_close_matches(cmd_name, possibilities, n=1, cutoff=0.45)
-
         if close:
             ctx.fail(f"Unknown command '{cmd_name}'. Did you mean '{close[0]}'?")
         else:
@@ -52,7 +49,7 @@ def cli():
 
 
 # ============================================================
-# INIT COMMAND
+# INIT COMMAND (REFACTORED)
 # ============================================================
 @cli.command()
 def init():
@@ -61,24 +58,29 @@ def init():
     current_path = Path.cwd()
     project_path = current_path / CWM_BANK
 
-    if inside_cwm_bank(current_path):
-        click.echo("ERROR: Cannot create a .cwm bank inside another .cwm bank.")
+    # This is the *only* check required by your new logic.
+    # It prevents "cwm init" inside ".cwm/data" etc.
+    if is_path_literally_inside_bank(current_path):
+        click.echo(f"ERROR: Cannot create a .cwm bank inside another .cwm bank.")
         return
 
+    # If a bank already exists *at this level*, just repair it.
+    if project_path.exists():
+        safe_create_cwm_folder(project_path, repair=True)
+        click.echo("A .cwm bank already exists in this project.")
+        return
+
+    # Check for permissions before creating
     if not has_write_permission(current_path):
         click.echo("ERROR: You do not have permission to create a CWM bank in this folder.")
         return
 
-    if not project_path.exists():
-        ok = safe_create_cwm_folder(project_path, repair=False)
-        if ok:
-            click.echo("Initialized empty CWM bank in this project.")
-        else:
-            click.echo("CWM initialization failed.")
-        return
-
-    safe_create_cwm_folder(project_path, repair=True)
-    click.echo("A .cwm bank already exists in this project.")
+    # No bank exists here, and we're not inside one. We are clear to create.
+    ok = safe_create_cwm_folder(project_path, repair=False)
+    if ok:
+        click.echo("Initialized empty CWM bank in this project.")
+    else:
+        click.echo("CWM initialization failed.")
 
 
 # ============================================================
@@ -86,6 +88,7 @@ def init():
 # ============================================================
 def ensure_global_folder():
     """Ensure global fallback folder exists with safety checks."""
+    # This function is correct and unchanged
     if not GLOBAL_CWM_BANK.exists():
         click.echo("Creating global CWM bank...")
         success = safe_create_cwm_folder(GLOBAL_CWM_BANK)
@@ -106,10 +109,11 @@ def hello():
     click.echo("Hello! Welcome to CWM your command watch manager.")
 
 
-# ============================================================
+# =================================S===========================
 # Register: SAVE COMMAND
 # ============================================================
 cli.add_command(save_command)
+cli.add_command(backup_cmd)
 
 
 # ============================================================
