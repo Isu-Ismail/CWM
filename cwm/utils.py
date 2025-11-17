@@ -1,70 +1,54 @@
+# cwm/utils.py
 import os
 import json
 from pathlib import Path
 import click
 import shutil
+from typing import Tuple # <-- Make sure this is imported
 
-# Define the bank name as a constant
 CWM_BANK_NAME = ".cwm"
 
 def _ensure_dir(p: Path):
     """Create folder p if not exists."""
     p.mkdir(exist_ok=True)
 
-
 def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
     """
-    Creates a CWM BANK structure using the new JSON document format.
-    This function no longer creates meta.json.
+    Creates the CWM bank structure.
     """
     try:
-        # Ensure base folder
-        _ensure_dir(folder_path)
-
-        # Create subfolders
         data_path = folder_path / "data"
         backup_path = data_path / "backup"
-
+        _ensure_dir(folder_path)
         _ensure_dir(data_path)
-        _ensure_dir(backup_path)  # Ensure the backup folder exists
+        _ensure_dir(backup_path)
 
-        # --- Define required JSON files with new structure ---
-        # The data and its metadata now live in the same file.
+        # Defines all files needed for a bank
         required_files = {
             "commands.json": {"last_command_id": 0, "commands": []},
             "saved_cmds.json": {"last_saved_id": 0, "commands": []},
+            "fav_cmds.json": [],
             "history.json": {"last_sync_id": 0, "commands": []},
-            "fav_cmds.json": [] # Favs can remain a simple list
+            "watch_session.json": {"isWatching": False, "startLine": 0}
         }
 
-        # --- CONFIG FILE ---
         config_file = folder_path / "config.json"
         if not config_file.exists():
-            if repair:
-                click.echo("config.json missing... recreated.")
             config_file.write_text("{}")
         
-        # --- REQUIRED DATA FILES ---
-        # This loop now ONLY creates files that are missing.
         for fname, default_value in required_files.items():
             file = data_path / fname
             if not file.exists():
                 file.write_text(json.dumps(default_value, indent=2))
                 if repair:
                     click.echo(f"{fname} missing... recreated.")
-
         return True
-
-    except PermissionError:
-        click.echo("ERROR: Permission denied. CWM cannot repair or create this bank.")
-        return False
     except Exception as e:
-        click.echo(f"Unexpected error in safe_create_cwm_folder: {e}")
+        click.echo(f"Error creating CWM folder: {e}", err=True)
         return False
 
 
 def has_write_permission(path: Path) -> bool:
-    """Checks if the user can write to a given path."""
     try:
         test = path / ".__cwm_test__"
         test.write_text("test")
@@ -73,22 +57,11 @@ def has_write_permission(path: Path) -> bool:
     except:
         return False
 
-# --- HELPER FUNCTIONS for finding banks ---
-
 def is_path_literally_inside_bank(path: Path) -> bool:
-    """
-    Checks if the given path is *literally inside* a .cwm folder.
-    e.g., C:\project\.cwm\data -> True
-    e.g., C:\project\subfolder -> False
-    """
     current = path.resolve()
     return CWM_BANK_NAME in current.parts
 
 def find_nearest_bank_path(start_path: Path) -> Path | None:
-    """
-    Looks for the nearest .cwm bank in the current or parent directories.
-    Returns the Path to the .cwm folder if found, else None.
-    """
     current = start_path.resolve()
     for parent in [current] + list(current.parents):
         candidate = parent / CWM_BANK_NAME
@@ -96,36 +69,41 @@ def find_nearest_bank_path(start_path: Path) -> Path | None:
             return candidate
     return None
 
+# --- PowerShell History functions ---
+
 def _get_powershell_history_path() -> Path | None:
-    """Finds the active PSReadLine history file path."""
     appdata = os.getenv("APPDATA")
     home = Path.home()
-    
-    # Standard paths for PSReadLine
     candidates = [
         Path(appdata) / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
         Path(appdata) / "Microsoft" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
         home / "AppData" / "Roaming" / "Microsoft" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
     ]
-    
     for path in candidates:
         if path.exists():
             return path
     return None
 
-def read_powershell_history() -> list[str]:
-    """Load PSReadLine system history."""
+# --- THIS IS THE FIX ---
+def read_powershell_history() -> Tuple[list[str], int]:
+    """Load PSReadLine system history.
+    
+    Returns:
+        (list of lines, total line count)
+    """
     path = _get_powershell_history_path()
     if not path:
-        return []
-        
+        click.echo("Error: Could not find PowerShell history file.", err=True)
+        return [], 0
     try:
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        return [ln.rstrip("\n") for ln in lines]
-    except Exception:
-        return []
+        # Return both the lines and the original length
+        return [ln.rstrip("\n") for ln in lines], len(lines)
+    except Exception as e:
+        click.echo(f"Error reading PowerShell history: {e}", err=True)
+        return [], 0
+# --- END OF FIX ---
 
 def is_cwm_call(s: str) -> bool:
-    """Checks if a command string is a CWM command."""
     s = s.strip()
     return s.startswith("cwm ") or s == "cwm"

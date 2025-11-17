@@ -2,7 +2,9 @@ import os
 import click
 from difflib import get_close_matches
 from pathlib import Path
-from importlib.metadata import version, PackageNotFoundError  # <-- 1. IMPORT THIS
+from importlib.metadata import version, PackageNotFoundError
+
+
 
 # Import the new, specific helpers
 from .utils import (
@@ -14,6 +16,7 @@ from .utils import (
 from .save_cmd import save_command   # <-- Import SAVE COMMAND
 from .backup_cmd import backup_cmd # <-- Import backup COmmand
 from .get_cmd import get_cmd                 # <-- NEW
+from .watch_cmd import watch_cmd  # <-- 1. IMPORT THIS
 
 
 
@@ -127,7 +130,8 @@ def hello():
 cli.add_command(save_command)
 cli.add_command(backup_cmd)
 cli.add_command(get_cmd)         # <-- NEW
-   # <-- NEW
+cli.add_command(watch_cmd)
+
 # ============================================================
 # MAIN ENTRY
 # ============================================================
