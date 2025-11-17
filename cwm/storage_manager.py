@@ -27,10 +27,12 @@ class StorageManager:
         self.backup_path = self.data_path / "backup"
         self.backup_limit = 10  # Max number of backups to keep per file
 
+        
+
         # JSON file paths
         self.commands_file   = self.data_path / "commands.json"
         self.saved_cmds_file = self.data_path / "saved_cmds.json"
-        self.history_file    = self.data_path / "watch_history.json"
+        self.cached_history_file = self.data_path / "history.json"
         self.fav_file        = self.data_path / "fav_cmds.json"
         
         # meta.json is GONE.
@@ -150,34 +152,33 @@ class StorageManager:
     # ---------------------------------------------------------------------
 
     def load_saved_cmds(self) -> dict:
-        """Loads the entire saved_cmds.json document."""
         return self._load_json(
             self.saved_cmds_file,
             default={"last_saved_id": 0, "commands": []}
         )
 
     def save_saved_cmds(self, data: dict):
-        """Saves the entire saved_cmds.json document."""
         try:
             self._save_json(self.saved_cmds_file, data)
             self._update_backup(self.saved_cmds_file)
         except Exception:
             click.echo("Failed to save commands. Backup not created.")
 
-    def load_watch_history(self) -> dict:
-        """Loads the entire watch_history.json document."""
+    # --- NEW CACHED HISTORY METHODS ---
+    def load_cached_history(self) -> dict:
+        """Loads the saved_history.json document."""
         return self._load_json(
-            self.history_file,
-            default={"history_last_num": 0, "history": []}
+            self.cached_history_file,
+            default={"last_sync_id": 0, "commands": []}
         )
 
-    def save_watch_history(self, data: dict):
-        """Saves the entire watch_history.json document."""
+    def save_cached_history(self, data: dict):
+        """Saves the saved_history.json document."""
+        # We don't backup the history cache, as you specified.
         try:
-            self._save_json(self.history_file, data)
-            self._update_backup(self.history_file)
+            self._save_json(self.cached_history_file, data)
         except Exception:
-            click.echo("Failed to save history. Backup not created.")
+            click.echo("Failed to save history cache.")
 
     def load_fav_ids(self) -> list:
         """Favorites can remain a simple list."""

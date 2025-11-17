@@ -33,7 +33,7 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
         required_files = {
             "commands.json": {"last_command_id": 0, "commands": []},
             "saved_cmds.json": {"last_saved_id": 0, "commands": []},
-            "watch_history.json": {"history_last_num": 0, "history": []},
+            "history.json": {"last_sync_id": 0, "commands": []},
             "fav_cmds.json": [] # Favs can remain a simple list
         }
 
@@ -95,3 +95,37 @@ def find_nearest_bank_path(start_path: Path) -> Path | None:
         if candidate.exists() and candidate.is_dir():
             return candidate
     return None
+
+def _get_powershell_history_path() -> Path | None:
+    """Finds the active PSReadLine history file path."""
+    appdata = os.getenv("APPDATA")
+    home = Path.home()
+    
+    # Standard paths for PSReadLine
+    candidates = [
+        Path(appdata) / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
+        Path(appdata) / "Microsoft" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
+        home / "AppData" / "Roaming" / "Microsoft" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
+    ]
+    
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+def read_powershell_history() -> list[str]:
+    """Load PSReadLine system history."""
+    path = _get_powershell_history_path()
+    if not path:
+        return []
+        
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        return [ln.rstrip("\n") for ln in lines]
+    except Exception:
+        return []
+
+def is_cwm_call(s: str) -> bool:
+    """Checks if a command string is a CWM command."""
+    s = s.strip()
+    return s.startswith("cwm ") or s == "cwm"

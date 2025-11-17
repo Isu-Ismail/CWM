@@ -6,70 +6,35 @@ import click
 from pathlib import Path
 from datetime import datetime
 from .storage_manager import StorageManager
+from .utils import read_powershell_history, is_cwm_call
 
-# (Regex and helper functions _now_iso, _is_cwm_call, etc. are unchanged)
+# Regex parsers
 VAR_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 VAR_ASSIGN_RE = re.compile(r"^\s*([A-Za-z0-9_-]+)\s?\=\s?(.+)$", flags=re.DOTALL)
 
 def _now_iso():
     return datetime.utcnow().isoformat()
 
-def _is_cwm_call(s: str) -> bool:
-    s = s.strip()
-    return s.startswith("cwm ") or s == "cwm"
-
-def _read_powershell_history():
-    # ... (unchanged) ...
-    results = []
-    appdata = os.getenv("APPDATA")
-    home = Path.home()
-    candidates = [
-        Path(appdata) / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
-        Path(appdata) / "Microsoft" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
-        home / "AppData" / "Roaming" / "Microsoft" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt",
-    ]
-    for path in candidates:
-        try:
-            if path.exists():
-                lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-                results = [ln.rstrip("\n") for ln in lines]
-                break
-        except:
-            continue
-    return results
+# (Removed local _is_cwm_call, as it's imported from utils)
 
 def _last_non_cwm_from_system_history():
-    # ... (unchanged) ...
-    lines = _read_powershell_history()
+    """Finds the last command from system history that wasn't a cwm call."""
+    lines = read_powershell_history()  # <-- This is kept for the -b flag
     for line in reversed(lines):
         if not line:
             continue
-        if _is_cwm_call(line):
+        if is_cwm_call(line):
             continue
         return line
     return None
 
-def _last_non_cwm_from_watch_history(manager: StorageManager):
-    # ... (unchanged, but now loads a document) ...
-    try:
-        hist_doc = manager.load_watch_history()
-        hist = hist_doc.get("history", [])
-    except:
-        return None
-    if not hist:
-        return None
-    for record in reversed(hist):
-        cmd = record.get("cmd")
-        if not cmd:
-            continue
-        if _is_cwm_call(cmd):
-            continue
-        return cmd
-    return None
+#
+# --- (Obsolete _last_non_cwm_from_watch_history function has been REMOVED) ---
+#
 
 
 # ============================================================================
-# STRATEGY HANDLERS (REFACTORED for new data structure)
+# STRATEGY HANDLERS
 # ============================================================================
 
 def _handle_list_mode(manager: StorageManager, raw_payload: str):
@@ -78,7 +43,7 @@ def _handle_list_mode(manager: StorageManager, raw_payload: str):
         raise click.UsageError("The -l flag does not accept arguments.")
         
     data_obj = manager.load_saved_cmds()
-    saved = data_obj.get("commands", []) # Get the list from the object
+    saved = data_obj.get("commands", [])
     
     if not saved:
         click.echo("No saved commands found.")
@@ -122,7 +87,7 @@ def _handle_rename_variable(manager: StorageManager, raw_payload: str):
 
     found["var"] = new
     found["updated_at"] = _now_iso()
-    manager.save_saved_cmds(data_obj) # Save the whole object back
+    manager.save_saved_cmds(data_obj)
     click.echo(f"Renamed var '{old}' to '{new}'")
 
 
@@ -152,7 +117,7 @@ def _handle_edit_value(manager: StorageManager, raw_payload: str):
 
     found["cmd"] = cmdtext
     found["updated_at"] = _now_iso()
-    manager.save_saved_cmds(data_obj) # Save the whole object
+    manager.save_saved_cmds(data_obj)
     click.echo(f"Updated var '{varname}' to cmd {cmdtext}")
 
 
@@ -165,9 +130,10 @@ def _handle_save_from_history(manager: StorageManager, raw_payload: str):
     if not VAR_NAME_RE.match(varname):
         raise click.UsageError("Invalid variable name. Use only letters, numbers, _, and -.")
 
-    cmd_to_save = _last_non_cwm_from_watch_history(manager)
-    if not cmd_to_save:
-        cmd_to_save = _last_non_cwm_from_system_history()
+    # --- THIS IS THE FIX ---
+    # We no longer check the (non-existent) watch history.
+    # We ONLY check the system history file.
+    cmd_to_save = _last_non_cwm_from_system_history()
 
     if not cmd_to_save:
         click.echo("ERROR: No usable history command found.")
@@ -191,7 +157,7 @@ def _handle_save_from_history(manager: StorageManager, raw_payload: str):
         "created_at": _now_iso(), "updated_at": _now_iso()
     }
     saved.append(entry)
-    manager.save_saved_cmds(data_obj) # Save the whole object
+    manager.save_saved_cmds(data_obj)
     click.echo(f"Saved history command as '{varname}': {cmd_to_save}")
 
 
@@ -219,7 +185,6 @@ def _handle_normal_save(manager: StorageManager, raw_payload: str):
                 click.echo(f"ERROR: Variable '{varname}' already exists. Use -e to modify.")
                 return
         
-        # --- NEW ID LOGIC ---
         new_id = data_obj.get("last_saved_id", 0) + 1
         data_obj["last_saved_id"] = new_id
 
@@ -229,7 +194,7 @@ def _handle_normal_save(manager: StorageManager, raw_payload: str):
             "created_at": _now_iso(), "updated_at": _now_iso()
         }
         saved.append(entry)
-        manager.save_saved_cmds(data_obj) # Save the whole object
+        manager.save_saved_cmds(data_obj)
         click.echo(f"Saved variable '{varname}' --> {cmdtext}")
 
     # CASE 2: raw command save
@@ -241,7 +206,6 @@ def _handle_normal_save(manager: StorageManager, raw_payload: str):
                 click.echo("ERROR: This command is already saved.")
                 return
 
-        # --- NEW ID LOGIC ---
         new_id = data_obj.get("last_saved_id", 0) + 1
         data_obj["last_saved_id"] = new_id
 
@@ -251,13 +215,65 @@ def _handle_normal_save(manager: StorageManager, raw_payload: str):
             "created_at": _now_iso(), "updated_at": _now_iso()
         }
         saved.append(entry)
-        manager.save_saved_cmds(data_obj) # Save the whole object
+        manager.save_saved_cmds(data_obj)
         click.echo(f"Saved raw command [{new_id}] --> {cmdtext}")
 
+def _handle_save_history(manager: StorageManager, count: str):
+    """
+    Read PowerShell history and save new commands to the CWM cache.
+    This logic was moved from the deleted 'save-history' command.
+    """
+    live_lines = read_powershell_history()
+    live_lines.reverse() # Newest-first
+    
+    commands_to_save = []
+    seen_live = set()
+    for cmd_str in live_lines:
+        if cmd_str and cmd_str not in seen_live:
+            if not is_cwm_call(cmd_str): # Exclude cwm calls
+                commands_to_save.append(cmd_str)
+            seen_live.add(cmd_str)
+    
+    if count.lower() != "all":
+        try:
+            num_to_save = int(count)
+            if num_to_save > 0:
+                commands_to_save = commands_to_save[:num_to_save]
+        except ValueError:
+            click.echo(f"Invalid count '{count}'. Aborting.")
+            return
+            
+    commands_to_save.reverse() # Save in chronological order
 
-# ============================================================================
-# SAVE COMMAND (The Dispatcher)
-# (This main function is unchanged and remains our clean dispatcher)
+    hist_obj = manager.load_cached_history()
+    cached_commands = hist_obj.get("commands", [])
+    last_id = hist_obj.get("last_sync_id", 0)
+    
+    seen_in_cache = set(item.get("cmd") for item in cached_commands)
+    
+    added_count = 0
+    for cmd_str in commands_to_save:
+        if cmd_str not in seen_in_cache:
+            added_count += 1
+            last_id += 1
+            cached_commands.append({
+                "id": last_id,
+                "cmd": cmd_str,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            seen_in_cache.add(cmd_str) 
+
+    if added_count == 0:
+        click.echo("History is already up to date. No new commands added.")
+        return
+
+    hist_obj["commands"] = cached_commands
+    hist_obj["last_sync_id"] = last_id
+    
+    manager.save_cached_history(hist_obj)
+    click.echo(f"Successfully saved {added_count} new commands to history cache.")
+
+
 # ============================================================================
 @click.command("save")
 @click.option("-e", "edit_value", is_flag=True, default=False,
@@ -268,23 +284,31 @@ def _handle_normal_save(manager: StorageManager, raw_payload: str):
               help="List all saved commands")
 @click.option("-b", "save_before", is_flag=True, default=False,
               help="Save the previous history command as a variable: cwm save -b var")
+# --- NEW FLAGS ---
+@click.option("--hist", "save_history_flag", is_flag=True, default=False,
+              help="Save PowerShell history to CWM cache.")
+@click.option("-n", "count", default="all", 
+              help="[History] Save only the last N commands or 'all'. [default: all]")
+# --- END NEW FLAGS ---
 @click.argument("payload", nargs=-1)
-def save_command(edit_value, edit_varname, list_mode, save_before, payload):
+def save_command(edit_value, edit_varname, list_mode, save_before, save_history_flag, count, payload):
     """
-    Save commands into the CWM bank.
-    Use --help for flag details. Only one flag can be used at a time.
+    Save commands into the CWM bank or save PS history.
+    
+    Use --help for flag details. Action flags are mutually exclusive.
     """
 
     manager = StorageManager()
     raw = " ".join(payload).strip()
     
-    # 1. Mutual Exclusivity Check (Unchanged)
+    # 1. Mutual Exclusivity Check (UPDATED)
     active_flags = [
         name for name, active in {
             "-e": edit_value,
             "-ev": edit_varname,
             "-l": list_mode,
-            "-b": save_before
+            "-b": save_before,
+            "--hist": save_history_flag  # <-- ADDED
         }.items() if active
     ]
     
@@ -293,7 +317,7 @@ def save_command(edit_value, edit_varname, list_mode, save_before, payload):
             f"Only one action flag can be used at a time. Active flags: {', '.join(active_flags)}"
         )
 
-    # 2. Strategy Dispatch (Unchanged)
+    # 2. Strategy Dispatch (UPDATED)
     try:
         if edit_value:
             _handle_edit_value(manager, raw)
@@ -303,8 +327,10 @@ def save_command(edit_value, edit_varname, list_mode, save_before, payload):
             _handle_list_mode(manager, raw)
         elif save_before:
             _handle_save_from_history(manager, raw)
+        elif save_history_flag: # <-- ADDED
+            _handle_save_history(manager, count)
         else:
-        # 3. Default Strategy: (No flags were used)
+            # 3. Default Strategy: (No flags were used)
             _handle_normal_save(manager, raw)
             
     except Exception as e:

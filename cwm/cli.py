@@ -2,6 +2,7 @@ import os
 import click
 from difflib import get_close_matches
 from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError  # <-- 1. IMPORT THIS
 
 # Import the new, specific helpers
 from .utils import (
@@ -12,10 +13,19 @@ from .utils import (
 
 from .save_cmd import save_command   # <-- Import SAVE COMMAND
 from .backup_cmd import backup_cmd # <-- Import backup COmmand
+from .get_cmd import get_cmd                 # <-- NEW
+
 
 
 CWM_BANK = ".cwm"
 GLOBAL_CWM_BANK = Path(os.getenv("APPDATA")) / "cwm"
+
+try:
+    # Get the version of the 'cwm' package (defined in pyproject.toml)
+    __version__ = version("cwm")
+except PackageNotFoundError:
+    # Fallback if the package is not installed (e.g., running direct)
+    __version__ = "0.0.0-dev"
 
 
 # ============================================================
@@ -43,6 +53,7 @@ class CwmGroup(click.Group):
 # Root CLI Group
 # ============================================================
 @click.group(cls=CwmGroup)
+@click.version_option(version=__version__, prog_name="cwm") # <-- 3. ADD THIS
 def cli():
     """CWM Command Watch Manager"""
     pass
@@ -106,7 +117,8 @@ ensure_global_folder()
 @cli.command()
 def hello():
     """Test command."""
-    click.echo("Hello! Welcome to CWM your command watch manager.")
+    # --- 4. USE THE VERSION HERE ---
+    click.echo(f"Hello! Welcome to CWM (v{__version__}), your command watch manager.")
 
 
 # =================================S===========================
@@ -114,8 +126,8 @@ def hello():
 # ============================================================
 cli.add_command(save_command)
 cli.add_command(backup_cmd)
-
-
+cli.add_command(get_cmd)         # <-- NEW
+   # <-- NEW
 # ============================================================
 # MAIN ENTRY
 # ============================================================

@@ -4,236 +4,20 @@ import json
 from .storage_manager import StorageManager
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
-from pathlib import Path
+from pathlib import Path  # <-- Fix: Added import
 
 # ============================================================================
-# BACKUP COMMAND GROUP
-# ============================================================================
-@click.group("backup")
-def backup_cmd():
-    """Manage and restore backups for saved_cmds.json."""
-    pass
-
-# ============================================================================
-# LIST COMMAND
-# ============================================================================
-@backup_cmd.command("list")
-def list_backups():
-    """
-    Lists available backups for saved_cmds.json.
-    """
-    manager = StorageManager()
-    backups = manager.list_backups_for_file("saved_cmds.json")
-    
-    if not backups:
-        click.echo("No backups found for saved_cmds.json.")
-        return
-        
-    click.echo("Available backups (Oldest to Newest):")
-    for bak in backups:
-        try:
-            data = json.loads(bak["full_path"].read_text(encoding="utf-8"))
-            count = len(data.get("commands", []))
-            count_str = f"{count} commands"
-        except Exception:
-            count_str = "Corrupted"
-            
-        click.echo(f"  ID: {bak['id']} | {bak['created']} | {count_str}")
-
-# ============================================================================
-# SHOW COMMAND (NOW WITH HEAD/TAIL)
-# ============================================================================
-@backup_cmd.command("show")
-@click.argument("backup_id", nargs=1, required=False)
-@click.option("--head", "head_flag", is_flag=True, help="Select backup from HEAD (oldest). Use with -n.")
-@click.option("--tail", "tail_flag", is_flag=True, help="Select backup from TAIL (newest). Use with -n.")
-@click.option("-n", "n_count", type=int, default=1, show_default=True, help="Select the Nth item for --head or --tail.")
-def show_backup(backup_id, head_flag, tail_flag, n_count):
-    """Shows the commands inside a specific backup file."""
-    manager = StorageManager()
-
-    # --- 1. Validate Flags and Get List of Backups ---
-    show_methods = [bool(backup_id), head_flag, tail_flag]
-    if sum(show_methods) == 0:
-        raise click.UsageError("You must provide a method: an ID, --head, or --tail.")
-    if sum(show_methods) > 1:
-        raise click.UsageError("Methods (ID, --head, --tail) are mutually exclusive.")
-
-    all_backups = manager.list_backups_for_file("saved_cmds.json")
-    if not all_backups:
-        click.echo("No backups found.")
-        return
-
-    backup_file_path: Path | None = None
-    try:
-        if backup_id:
-            backup_file_path = manager.find_backup_by_id("saved_cmds.json", backup_id)
-            if not backup_file_path:
-                raise click.UsageError(f"Backup with ID '{backup_id}' not found.")
-
-        elif head_flag:
-            if not (1 <= n_count <= len(all_backups)):
-                raise click.UsageError(f"Invalid index {n_count}. Must be between 1 and {len(all_backups)}.")
-            backup_file_path = all_backups[n_count - 1]["full_path"] # Oldest is at index 0
-
-        elif tail_flag:
-            if not (1 <= n_count <= len(all_backups)):
-                raise click.UsageError(f"Invalid index {n_count}. Must be between 1 and {len(all_backups)}.")
-            backup_file_path = all_backups[-n_count]["full_path"] # Newest is at index -1
-            
-    except click.UsageError as e:
-        click.echo(e.message)
-        return
-    
-    if not backup_file_path:
-        click.echo("Error: Could not determine which backup to show.")
-        return
-
-    # --- 2. Load and parse the backup file ---
-    try:
-        data_obj = json.loads(backup_file_path.read_text(encoding="utf-8"))
-        saved_cmds = data_obj.get("commands", [])
-        last_id = data_obj.get("last_saved_id", 0)
-    except Exception as e:
-        click.echo(f"Error: Could not read corrupted backup file {backup_file_path.name}. {e}")
-        return
-
-    # --- 3. Display the commands ---
-    if not saved_cmds:
-        click.echo(f"Backup file {backup_file_path.name} is valid but contains no commands.")
-        return
-
-    click.echo(f"--- Commands in Backup {backup_file_path.name} (Total: {len(saved_cmds)}, Last ID: {last_id}) ---")
-    for item in saved_cmds:
-        sid = item.get("id")
-        var = item.get("var") or "(raw)"
-        cmd = item.get("cmd")
-        fav = "* " if item.get("fav") else ""
-        click.echo(f"  [{sid}] {fav}{var} -- {cmd}")
-
-
-# ============================================================================
-# MERGE COMMAND (Unchanged, but remember to use quotes!)
-# ============================================================================
-@backup_cmd.command("merge")
-@click.argument("backup_id", nargs=1, required=False)
-@click.option("--head", "head_flag", is_flag=True, help="Select backup from HEAD (oldest). Use with -n.")
-@click.option("--tail", "tail_flag", is_flag=True, help="Select backup from TAIL (newest). Use with -n.")
-@click.option("-n", "n_count", type=int, default=1, show_default=True, help="Select the Nth item for --head or --tail.")
-@click.option("--chain", "chain_ids", type=str, help="Merge a comma-separated chain of IDs sequentially. MUST USE QUOTES.")
-def merge_backup(backup_id, head_flag, tail_flag, n_count, chain_ids):
-    """
-    Merge commands from one or more backups into the current saved commands.
-    
-    You must provide ONE merge method:
-    1.  By ID: cwm backup merge <backup_id>
-    2.  By Position: cwm backup merge --head -n 2
-    3.  By Chain: cwm backup merge --chain "id1,id2,id3"
-    """
-    manager = StorageManager()
-    
-    # --- 1. Validate Flags and Get List of Backups ---
-    
-    merge_methods = [bool(backup_id), head_flag, tail_flag, bool(chain_ids)]
-    if sum(merge_methods) == 0:
-        raise click.UsageError("You must provide a merge method: an ID, --head, --tail, or --chain.")
-    if sum(merge_methods) > 1:
-        raise click.UsageError("Merge methods (ID, --head, --tail, --chain) are mutually exclusive.")
-
-    backup_paths_to_merge: List[Path] = []
-    
-    all_backups = manager.list_backups_for_file("saved_cmds.json")
-    if not all_backups:
-        click.echo("No backups found to merge.")
-        return
-
-    try:
-        if backup_id:
-            path = manager.find_backup_by_id("saved_cmds.json", backup_id)
-            if not path:
-                raise click.UsageError(f"Backup with ID '{backup_id}' not found.")
-            backup_paths_to_merge.append(path)
-
-        elif head_flag:
-            if not (1 <= n_count <= len(all_backups)):
-                raise click.UsageError(f"Invalid index {n_count}. Must be between 1 and {len(all_backups)}.")
-            backup_paths_to_merge.append(all_backups[n_count - 1]["full_path"]) # Oldest is at index 0
-
-        elif tail_flag:
-            if not (1 <= n_count <= len(all_backups)):
-                raise click.UsageError(f"Invalid index {n_count}. Must be between 1 and {len(all_backups)}.")
-            backup_paths_to_merge.append(all_backups[-n_count]["full_path"]) # Newest is at index -1
-            
-        elif chain_ids:
-            # We split by comma, which handles "id1,id2" and "id1, id2" (with strip)
-            ids = [id_str.strip() for id_str in chain_ids.split(',')]
-            if not ids:
-                raise click.UsageError("Chain cannot be empty.")
-                
-            for bid in ids:
-                path = manager.find_backup_by_id("saved_cmds.json", bid)
-                if not path:
-                    # This is where your error was happening.
-                    # It's because the 'bid' your shell sent was '164646', not '0164646'.
-                    # Using quotes like --chain "0164646" fixes this.
-                    raise click.UsageError(f"Backup with ID '{bid}' in chain not found. Did you use quotes?")
-                backup_paths_to_merge.append(path)
-                
-    except click.UsageError as e:
-        click.echo(e.message)
-        return
-        
-    # --- 2. Load Current Data ---
-    click.echo("Loading current saved commands...")
-    try:
-        current_data = manager.load_saved_cmds()
-    except Exception as e:
-        click.echo(f"Error loading current data: {e}. Aborting merge.")
-        return
-
-    # --- 3. Perform Sequential Merge ---
-    
-    merged_data_in_memory = current_data
-    total_added = 0
-    
-    for i, bak_path in enumerate(backup_paths_to_merge):
-        click.echo(f"\n--- Merging Backup {i+1} of {len(backup_paths_to_merge)} ({bak_path.name}) ---")
-        try:
-            backup_data = json.loads(bak_path.read_text(encoding="utf-8"))
-            
-            merged_data_in_memory, num_added = _perform_interactive_merge(
-                current_data=merged_data_in_memory,
-                backup_data=backup_data
-            )
-            total_added += num_added
-            
-        except Exception as e:
-            click.echo(f"Error reading backup {bak_path.name}: {e}. Skipping this file.")
-            continue
-            
-    # --- 4. Finalize and Save (Only once!) ---
-    if total_added == 0:
-        click.echo("\nMerge complete. No new commands were added.")
-        return
-
-    click.echo(f"\n--- Merge Complete ---")
-    click.echo(f"Total new commands added: {total_added}")
-    
-    try:
-        manager.save_saved_cmds(merged_data_in_memory)
-        click.echo("Successfully saved merged commands and created new backup.")
-    except Exception as e:
-        click.echo(f"CRITICAL ERROR: Failed to save final merged data: {e}")
-
-# ============================================================================
-# MERGE HELPER FUNCTION (CORE LOGIC)
+# HELPER FUNCTIONS
 # ============================================================================
 
-def _perform_interactive_merge(current_data: Dict[str, Any], backup_data: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
+def _now_iso():
+    """Helper for timestamps."""
+    return datetime.utcnow().isoformat()
+
+def _perform_interactive_merge(current_data: Dict[str, Any], backup_data: Dict[str, Any]) -> Tuple[Dict[str, Any], int]: # <-- Fix: Use Tuple
     """
     Performs the core merge logic between two data objects.
-    Handles duplicates, conflicts, and re-indexing.
-    Returns the new merged data object and the number of commands added.
+    (This function is unchanged and still handles all the merge logic)
     """
     
     current_cmds = current_data.get("commands", [])
@@ -312,7 +96,284 @@ def _perform_interactive_merge(current_data: Dict[str, Any], backup_data: Dict[s
     
     return current_data, len(commands_to_add)
 
+def _get_sneak_peek(bak_path: Path) -> str:
+    """Helper to get the first and last command from a backup."""
+    try:
+        data = json.loads(bak_path.read_text(encoding="utf-8"))
+        cmds = data.get("commands", [])
+        if not cmds:
+            return "(empty)"
+        
+        first = (cmds[0].get("var") or cmds[0].get("cmd", ""))[:20]
+        
+        if len(cmds) > 1:
+            last = (cmds[-1].get("var") or cmds[-1].get("cmd", ""))[:20]
+            return f"| {first}... {last}"
+        
+        return f"| {first}"
+        
+    except Exception:
+        return "| (Corrupted)"
 
-def _now_iso():
-    """Helper for timestamps."""
-    return datetime.utcnow().isoformat()
+def _prompt_for_backup_selection(manager: StorageManager, hide_sneak_peek: bool = False) -> Dict[str, Dict]:
+    """
+    Lists all backups and returns a map of {list_number: backup_object}.
+    """
+    backups = manager.list_backups_for_file("saved_cmds.json")
+    if not backups:
+        return {}
+        
+    click.echo("Available backups (Oldest to Newest):")
+    display_map = {}
+    
+    for i, bak in enumerate(backups):
+        list_num_str = str(i + 1)
+        display_map[list_num_str] = bak
+        
+        sneak_peek = ""
+        if not hide_sneak_peek:
+            sneak_peek = _get_sneak_peek(bak["full_path"])
+            
+        click.echo(f"  [{list_num_str}] ID: {bak['id']} | {bak['created']} {sneak_peek}")
+        
+    return display_map
+
+# ============================================================================
+# BACKUP COMMAND GROUP
+# ============================================================================
+@click.group("backup")
+def backup_cmd():
+    """Manage and restore backups for saved_cmds.json."""
+    pass
+
+# ============================================================================
+# LIST COMMAND
+# ============================================================================
+@backup_cmd.command("list")
+def list_backups():
+    """
+    Lists available backups for saved_cmds.json.
+    """
+    manager = StorageManager()
+    display_map = _prompt_for_backup_selection(manager, hide_sneak_peek=False)
+    if not display_map:
+        click.echo("No backups found for saved_cmds.json.")
+
+# ============================================================================
+# SHOW COMMAND (Refactored)
+# ============================================================================
+@backup_cmd.command("show")
+@click.argument("backup_id", nargs=1, required=False)
+@click.option("--latest", is_flag=True, help="Show the most recent backup.")
+@click.option("-l", "--list", "list_mode", is_flag=True, help="List and select a backup to show.")
+def show_backup(backup_id, latest, list_mode):
+    """Shows the commands inside a specific backup file."""
+    manager = StorageManager()
+    
+    # --- 1. Determine which backup file to show ---
+    backup_file_path: Path | None = None
+    
+    methods = sum([bool(backup_id), latest, list_mode])
+    if methods > 1:
+        raise click.UsageError("Only one of <backup_id>, --latest, or -l is allowed.")
+        
+    if backup_id:
+        backup_file_path = manager.find_backup_by_id("saved_cmds.json", backup_id)
+        if not backup_file_path:
+            click.echo(f"Error: Backup with ID '{backup_id}' not found.")
+            return
+            
+    elif latest:
+        all_backups = manager.list_backups_for_file("saved_cmds.json")
+        if not all_backups:
+            click.echo("No backups found.")
+            return
+        backup_file_path = all_backups[-1]["full_path"] # Get newest
+        
+    elif list_mode:
+        display_map = _prompt_for_backup_selection(manager, hide_sneak_peek=False)
+        if not display_map:
+            click.echo("No backups found.")
+            return
+            
+        try:
+            choice = click.prompt("Enter number to show (or press Enter to skip)", default="", show_default=False)
+            if not choice:
+                return
+            if choice not in display_map:
+                click.echo(f"Error: '{choice}' is not a valid number.")
+                return
+            backup_file_path = display_map[choice]["full_path"]
+        except click.exceptions.Abort:
+            click.echo("\nCancelled.")
+            return
+    else:
+        click.echo("Please provide a <backup_id>, --latest, or -l to select a backup.")
+        return
+
+    # --- 2. Load and parse the backup file ---
+    try:
+        data_obj = json.loads(backup_file_path.read_text(encoding="utf-8"))
+        saved_cmds = data_obj.get("commands", [])
+        last_id = data_obj.get("last_saved_id", 0)
+    except Exception as e:
+        click.echo(f"Error: Could not read corrupted backup file {backup_file_path.name}. {e}")
+        return
+
+    # --- 3. Display the commands ---
+    if not saved_cmds:
+        click.echo(f"Backup {backup_file_path.name} is valid but contains no commands.")
+        return
+
+    click.echo(f"--- Commands in Backup {backup_file_path.name} (Total: {len(saved_cmds)}, Last ID: {last_id}) ---")
+    for item in saved_cmds:
+        sid = item.get("id")
+        var = item.get("var") or "(raw)"
+        cmd = item.get("cmd")
+        fav = "* " if item.get("fav") else ""
+        click.echo(f"  [{sid}] {fav}{var} -- {cmd}")
+
+# ============================================================================
+# MERGE COMMAND (Refactored)
+# ============================================================================
+@backup_cmd.command("merge")
+@click.argument("backup_id", nargs=1, required=False)
+@click.option("-l", "--list", "list_mode", is_flag=True, help="List and select backups to merge.")
+@click.option("-h", "--hide-sneak-peek", is_flag=True, help="[List] Hide command sneak peek.")
+@click.option("--chain", "chain_ids", type=str, help="Merge a comma-separated chain of IDs. REQUIRES QUOTES.")
+def merge_backup(backup_id, list_mode, hide_sneak_peek, chain_ids):
+    """
+    Merge commands from one or more backups into the current saved commands.
+    
+    You must provide ONE merge method:
+    1.  By ID: cwm backup merge <backup_id>
+    2.  By List: cwm backup merge -l
+    3.  By Chain: cwm backup merge --chain "id1,id2,id3"
+    4.  By Chain List: cwm backup merge --chain -l
+    """
+    manager = StorageManager()
+    backup_paths_to_merge: List[Path] = []
+    
+    # --- 1. Validate Flags and Get List of Backups ---
+    methods = sum([bool(backup_id), list_mode, bool(chain_ids)])
+    if methods == 0:
+        raise click.UsageError("You must provide a merge method: an ID, -l, or --chain.")
+    if methods > 1 and not (chain_ids and list_mode):
+        raise click.UsageError("Merge methods (ID, -l, --chain) are mutually exclusive.")
+    
+    display_map = {} # This will hold our { "1": bak, ... } map
+    
+    try:
+        if backup_id:
+            path = manager.find_backup_by_id("saved_cmds.json", backup_id)
+            if not path:
+                raise click.UsageError(f"Backup with ID '{backup_id}' not found.")
+            backup_paths_to_merge.append(path)
+
+        elif chain_ids:
+            if list_mode:
+                # --- Chain-List Mode (e.g., cwm backup merge --chain -l) ---
+                display_map = _prompt_for_backup_selection(manager, hide_sneak_peek)
+                if not display_map:
+                    raise click.UsageError("No backups found to merge.")
+                
+                choice_str = click.prompt("Enter list numbers to merge (e.g., 1,3,2 or 1-3)")
+                
+                # Parse the choice string (1,3,2)
+                selected_nums = []
+                for part in choice_str.split(','):
+                    part = part.strip()
+                    if '-' in part: # Handle range like 1-3
+                        start_s, end_s = part.split('-')
+                        try:
+                            start = int(start_s)
+                            end = int(end_s)
+                            if start > end:
+                                raise click.UsageError(f"Invalid range: {part}. Start must be <= end.")
+                            selected_nums.extend(range(start, end + 1))
+                        except ValueError:
+                             raise click.UsageError(f"Invalid range: {part}. Must be integers.")
+                    else:
+                        try:
+                            selected_nums.append(int(part))
+                        except ValueError:
+                             raise click.UsageError(f"Invalid number: {part}. Must be an integer.")
+
+                # Validate all selected numbers
+                for num in selected_nums:
+                    num_str = str(num)
+                    if num_str not in display_map:
+                        raise click.UsageError(f"Invalid selection: '{num_str}'. Not in list [1-{len(display_map)}].")
+                    backup_paths_to_merge.append(display_map[num_str]["full_path"])
+            
+            else:
+                # --- Chain-ID Mode (e.g., cwm backup merge --chain "id1,id2") ---
+                ids = [id_str.strip() for id_str in chain_ids.split(',')]
+                for bid in ids:
+                    path = manager.find_backup_by_id("saved_cmds.json", bid)
+                    if not path:
+                        raise click.UsageError(f"Backup with ID '{bid}' in chain not found. Did you use quotes?")
+                    backup_paths_to_merge.append(path)
+        
+        elif list_mode:
+            # --- Single-List Mode (e.g., cwm backup merge -l) ---
+            display_map = _prompt_for_backup_selection(manager, hide_sneak_peek)
+            if not display_map:
+                raise click.UsageError("No backups found to merge.")
+            
+            choice = click.prompt("Enter number to merge (or press Enter to skip)", default="", show_default=False)
+            if not choice:
+                return # Abort
+            if choice not in display_map:
+                raise click.UsageError(f"Error: '{choice}' is not a valid number.")
+            backup_paths_to_merge.append(display_map[choice]["full_path"])
+            
+    except click.UsageError as e:
+        click.echo(e.message)
+        return
+    except click.exceptions.Abort:
+        click.echo("\nCancelled.")
+        return
+        
+    # --- 2. Load Current Data ---
+    click.echo("Loading current saved commands...")
+    try:
+        current_data = manager.load_saved_cmds()
+    except Exception as e:
+        click.echo(f"Error loading current data: {e}. Aborting merge.")
+        return
+
+    # --- 3. Perform Sequential Merge ---
+    merged_data_in_memory = current_data
+    total_added = 0
+    
+    for i, bak_path in enumerate(backup_paths_to_merge):
+        click.echo(f"\n--- Merging Backup {i+1} of {len(backup_paths_to_merge)} ({bak_path.name}) ---")
+        try:
+            backup_data = json.loads(bak_path.read_text(encoding="utf-8"))
+            
+            merged_data_in_memory, num_added = _perform_interactive_merge(
+                current_data=merged_data_in_memory,
+                backup_data=backup_data
+            )
+            total_added += num_added
+            
+        except Exception as e:
+            click.echo(f"Error reading backup {bak_path.name}: {e}. Skipping this file.")
+            continue
+            
+    # --- 4. Finalize and Save (Only once!) ---
+    if total_added == 0:
+        click.echo("\nMerge complete. No new commands were added.")
+        return
+
+    click.echo(f"\n--- Merge Complete ---")
+    click.echo(f"Total new commands added: {total_added}")
+    
+    try:
+        manager.save_saved_cmds(merged_data_in_memory)
+        click.echo("Successfully saved merged commands and created new backup.")
+    except Exception as e:
+        click.echo(f"CRITICAL ERROR: Failed to save final merged data: {e}")
+
+        

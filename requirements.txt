@@ -3,3 +3,5 @@ prompt_toolkit
 rich
 click
 colorama
+pyperclip
+
