@@ -6,9 +6,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import json.decoder
-# Ensure this import is here
 from .utils import safe_create_cwm_folder, find_nearest_bank_path
-# Ensure this is here, too
 from typing import Tuple 
 
 CWM_FOLDER = ".cwm"
@@ -38,7 +36,6 @@ class StorageManager:
             click.echo(f"Created global CWM bank at:\n{GLOBAL_CWM_BANK}")
         return GLOBAL_CWM_BANK
 
-    # --- THIS IS THE FIX for Restore-on-Delete ---
     def _load_json(self, file: Path, default):
         """
         Load JSON safely.
@@ -50,18 +47,16 @@ class StorageManager:
             # If file exists and is valid, just return its content
             return json.loads(file.read_text())
         except FileNotFoundError:
-            # This is your "deleted file" logic
             click.echo(f"WARNING: {file.name} is missing. Attempting to restore from backup...")
             return self._restore_from_backup(file, default)
         except json.decoder.JSONDecodeError:
-            # This is your "corrupted file" logic
             click.echo(f"ERROR: {file.name} corrupted. Restoring from backup...")
             return self._restore_from_backup(file, default)
         except Exception as e:
             # Catch other potential errors (e.g., permissions)
             click.echo(f"Unexpected error loading {file.name}: {e}. Restoring...")
             return self._restore_from_backup(file, default)
-    # --- END OF FIX ---
+
 
     def _save_json(self, file: Path, data):
         try:
@@ -71,6 +66,7 @@ class StorageManager:
         except Exception as e:
             click.echo(f"ERROR writing {file.name}: {e}")
             raise e
+
 
     def _restore_from_backup(self, file: Path, default):
         click.echo(f"Attempting to restore {file.name} from backups...")
@@ -98,6 +94,7 @@ class StorageManager:
         file.write_text(json.dumps(default, indent=2))
         return default
 
+
     def _update_backup(self, file: Path):
         try:
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -119,7 +116,6 @@ class StorageManager:
         except Exception as e:
             click.echo(f"WARNING: Could not update backup for {file.name}: {e}")
 
-    # --- (All other methods: load/save_saved_cmds, load/save_cached_history, etc. are correct) ---
     def load_saved_cmds(self) -> dict:
         return self._load_json(
             self.saved_cmds_file,

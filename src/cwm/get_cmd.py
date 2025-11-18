@@ -3,16 +3,15 @@ import click
 import pyperclip
 from .storage_manager import StorageManager
 from .utils import read_powershell_history, is_cwm_call
-from typing import List, Dict, Any, Tuple # Added for helpers
-from pathlib import Path # Added for helpers
 
-# --- Helper for History Logic (UPDATED) ---
+
+
 def _get_history_commands(manager: StorageManager, cached: bool, active: bool) -> list:
     """Loads commands from live PS history, cached file, or active session."""
     
-    # --- THIS IS THE FIX ---
+  
     start_line = 0  # Initialize start_line to 0
-    # --- END OF FIX ---
+   
 
     if cached:
         click.echo("Loading from cached history...")
@@ -39,12 +38,12 @@ def _get_history_commands(manager: StorageManager, cached: bool, active: bool) -
         
     return [{"id": i+start_line+1, "cmd": line} for i, line in enumerate(lines)]
 
-# --- (_filter_and_display helper function is UNCHANGED and still works) ---
+
 def _filter_and_display(commands: list, count: str, exclude: str, filter: str, list_only: bool):
     """
     The core logic for filtering, displaying, and prompting for history.
     """
-    # (This function is identical to the one in our previous step)
+ 
     commands.reverse()
     unique_commands = []
     seen = set()
@@ -123,7 +122,7 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
     except click.exceptions.Abort:
         click.echo("\nCancelled.")
 
-# --- The Main `get` Command (UPDATED) ---
+
 @click.command("get")
 @click.argument("name_or_id", required=False)
 @click.option("--id", "id_flag", type=int, help="Get a saved command by its unique ID.")
@@ -164,10 +163,10 @@ def get_cmd(name_or_id, id_flag, copy_flag, list_mode, tag_flag,
         return
 
     # --- MODE 2: Get from saved_cmds.json ---
-    # (This entire section is unchanged from our last version)
+    
     
     if list_mode or tag_flag:
-        # (This is the _filter_and_display_saved logic, which is unchanged)
+       
         data_obj = manager.load_saved_cmds()
         commands = data_obj.get("commands", [])
         _filter_and_display_saved(commands, count, exclude, filter, tag_flag)
@@ -203,7 +202,7 @@ def get_cmd(name_or_id, id_flag, copy_flag, list_mode, tag_flag,
     else:
         click.echo(command_to_get)
 
-# --- (We must add _filter_and_display_saved back in) ---
+
 def _filter_and_display_saved(commands: list, count: str, exclude: str, filter: str, tag: str):
     """
     New logic for filtering and prompting for SAVED commands.

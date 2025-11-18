@@ -1,13 +1,42 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cwm"
+name = "cwm-cli" 
 version = "0.1.0"
-description = "Command Watch Manager"
-authors = [{name = "Your Name"}]
-dependencies = ["click"]
+description = "Command Watch Manager - Track, save, and retrieve your shell commands."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+  {name = "Ismail", email = "ismailisims1@gmail.com"},
+]
+keywords = ["cli", "terminal", "history", "productivity", "manager"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Utilities",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "click",
+    "colorama",
+    "prompt_toolkit",
+    "rich",
+    "pyperclip"
+]
 
 [project.scripts]
 cwm = "cwm.cli:cli"
+
+[project.urls]
+"Homepage" = "https://github.com/Isu-Ismail/cwm"
+"Bug Tracker" = "https://github.com/Isu-Ismail/cwm/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cwm*"]

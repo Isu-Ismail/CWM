@@ -1,7 +1,5 @@
-
-prompt_toolkit
-rich
 click
 colorama
+prompt_toolkit
+rich
 pyperclip
-

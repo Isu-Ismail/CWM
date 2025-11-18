@@ -1,0 +1,2 @@
+[console_scripts]
+cwm = cwm.cli:cli

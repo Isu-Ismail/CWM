@@ -3,8 +3,7 @@ import os
 import json
 from pathlib import Path
 import click
-import shutil
-from typing import Tuple # <-- Make sure this is imported
+from typing import Tuple 
 
 CWM_BANK_NAME = ".cwm"
 
@@ -84,7 +83,7 @@ def _get_powershell_history_path() -> Path | None:
             return path
     return None
 
-# --- THIS IS THE FIX ---
+
 def read_powershell_history() -> Tuple[list[str], int]:
     """Load PSReadLine system history.
     
@@ -102,7 +101,7 @@ def read_powershell_history() -> Tuple[list[str], int]:
     except Exception as e:
         click.echo(f"Error reading PowerShell history: {e}", err=True)
         return [], 0
-# --- END OF FIX ---
+
 
 def is_cwm_call(s: str) -> bool:
     s = s.strip()

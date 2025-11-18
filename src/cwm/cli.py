@@ -6,6 +6,8 @@ from importlib.metadata import version, PackageNotFoundError
 
 
 
+
+
 # Import the new, specific helpers
 from .utils import (
     has_write_permission,
@@ -13,10 +15,13 @@ from .utils import (
     is_path_literally_inside_bank  # <-- The only check we need
 )
 
-from .save_cmd import save_command   # <-- Import SAVE COMMAND
-from .backup_cmd import backup_cmd # <-- Import backup COmmand
-from .get_cmd import get_cmd                 # <-- NEW
-from .watch_cmd import watch_cmd  # <-- 1. IMPORT THIS
+from .save_cmd import save_command   
+from .backup_cmd import backup_cmd 
+from .get_cmd import get_cmd                 
+from .watch_cmd import watch_cmd  
+from .bank_cmd import bank_cmd
+from .clear_cmd import clear_cmd
+
 
 
 
@@ -56,7 +61,7 @@ class CwmGroup(click.Group):
 # Root CLI Group
 # ============================================================
 @click.group(cls=CwmGroup)
-@click.version_option(version=__version__, prog_name="cwm") # <-- 3. ADD THIS
+@click.version_option(version=__version__, prog_name="cwm") 
 def cli():
     """CWM Command Watch Manager"""
     pass
@@ -120,8 +125,8 @@ ensure_global_folder()
 @cli.command()
 def hello():
     """Test command."""
-    # --- 4. USE THE VERSION HERE ---
     click.echo(f"Hello! Welcome to CWM (v{__version__}), your command watch manager.")
+    click.echo("touch some grass.....")
 
 
 # =================================S===========================
@@ -129,8 +134,10 @@ def hello():
 # ============================================================
 cli.add_command(save_command)
 cli.add_command(backup_cmd)
-cli.add_command(get_cmd)         # <-- NEW
+cli.add_command(get_cmd)         
 cli.add_command(watch_cmd)
+cli.add_command(bank_cmd)   
+cli.add_command(clear_cmd)
 
 # ============================================================
 # MAIN ENTRY

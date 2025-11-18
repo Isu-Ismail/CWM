@@ -1,6 +1,6 @@
 # cwm/watch_cmd.py
 import click
-from .storage_manager import StorageManager
+from .storage_manager import StorageManager, GLOBAL_CWM_BANK
 from .utils import read_powershell_history, is_cwm_call
 from datetime import datetime
 
@@ -17,8 +17,8 @@ def start():
     """
     manager = StorageManager()
     
-    # Condition: Must be in a bank
-    if manager.get_bank_path() == manager.GLOBAL_CWM_BANK:
+    if manager.get_bank_path() == GLOBAL_CWM_BANK:
+
         click.echo("Error: 'cwm watch' can only be run inside a CWM bank (run 'cwm init').", err=True)
         return
         
@@ -31,7 +31,6 @@ def start():
     else:
         click.echo("Watch session started.")
 
-    # Save the *next* line number as the starting point
     session["isWatching"] = True
     session["startLine"] = line_count
     manager.save_watch_session(session)
@@ -55,20 +54,16 @@ def stop(save_flag, exclude, filter):
     start_line = session.get("startLine", 0)
     
     if save_flag:
-        # --- Save Logic ---
         click.echo("Saving captured session to history...")
         lines, _ = read_powershell_history()
         
-        # Get only the new commands from the live session
         commands_to_save = lines[start_line:]
         
-        # Filter this new list
         if exclude:
             commands_to_save = [cmd for cmd in commands_to_save if not cmd.startswith(exclude)]
         if filter:
             commands_to_save = [cmd for cmd in commands_to_save if filter in cmd]
             
-        # Load cached history to append
         hist_obj = manager.load_cached_history()
         cached_commands = hist_obj.get("commands", [])
         last_id = hist_obj.get("last_sync_id", 0)
@@ -76,7 +71,6 @@ def stop(save_flag, exclude, filter):
         
         added_count = 0
         for cmd_str in commands_to_save:
-            # Silently skip duplicates and cwm calls
             if cmd_str and cmd_str not in seen_in_cache and not is_cwm_call(cmd_str):
                 added_count += 1
                 last_id += 1
@@ -92,7 +86,6 @@ def stop(save_flag, exclude, filter):
         manager.save_cached_history(hist_obj)
         click.echo(f"Saved {added_count} new commands.")
 
-    # --- Stop the session ---
     session["isWatching"] = False
     session["startLine"] = 0
     manager.save_watch_session(session)
