@@ -1,5 +1,0 @@
-click
-colorama
-prompt_toolkit
-rich
-pyperclip
