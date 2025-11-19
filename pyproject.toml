@@ -1,23 +1,24 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "cwm-cli" 
+name = "cwm-cli"
 version = "0.1.0"
 description = "Command Watch Manager - Track, save, and retrieve your shell commands."
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "MIT"
+
 authors = [
   {name = "Ismail", email = "ismailisims1@gmail.com"},
 ]
+
 keywords = ["cli", "terminal", "history", "productivity", "manager"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Utilities",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
@@ -37,6 +38,8 @@ cwm = "cwm.cli:cli"
 "Homepage" = "https://github.com/Isu-Ismail/cwm"
 "Bug Tracker" = "https://github.com/Isu-Ismail/cwm/issues"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["cwm*"]
+# --- HATCHLING CONFIGURATION ---
+# This replaces [tool.setuptools.packages.find]
+# We explicitly map the 'src/cwm' folder to the 'cwm' package.
+[tool.hatch.build.targets.wheel.sources]
+"src/cwm" = "cwm"
