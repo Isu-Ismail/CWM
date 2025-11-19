@@ -1,42 +1,37 @@
 # cwm/cli.py
 import os
 import click
+import platform 
 from difflib import get_close_matches
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
 from .utils import (
     has_write_permission,
+    is_history_sync_enabled,
     safe_create_cwm_folder,
-    is_path_literally_inside_bank
+    is_path_literally_inside_bank,
+    get_history_file_path 
 )
 
-# --- COMMAND IMPORTS ---
 from .save_cmd import save_command
 from .backup_cmd import backup_cmd
 from .get_cmd import get_cmd
 from .watch_cmd import watch_cmd
 from .bank_cmd import bank_cmd
 from .clear_cmd import clear_cmd
+from .setup_cmd import setup_cmd
 
 CWM_BANK = ".cwm"
-GLOBAL_CWM_BANK = Path(os.getenv("APPDATA")) / "cwm"
+GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 
 try:
     __version__ = version("cwm-cli") 
 except PackageNotFoundError:
-    __version__ = "0.1.0" # Fallback
+    __version__ = "0.1.0" 
 
-
-# ============================================================
-# Custom Click Group with closest-command suggestion
-# ============================================================
 class CwmGroup(click.Group):
     def get_command(self, ctx, cmd_name):
-        """
-        Override click.Group.get_command to provide suggestions
-        for unknown commands.
-        """
         rv = click.Group.get_command(self, ctx, cmd_name)
         if rv is not None:
             return rv
@@ -47,10 +42,6 @@ class CwmGroup(click.Group):
         else:
             ctx.fail(f"Unknown command '{cmd_name}'. Run 'cwm --help' for a list of commands.")
 
-
-# ============================================================
-# Root CLI Group
-# ============================================================
 @click.group(
     cls=CwmGroup,
     epilog="For full documentation and issues, visit: https://github.com/Isu-Ismail/cwm"
@@ -64,10 +55,6 @@ def cli():
     """
     pass
 
-
-# ============================================================
-# INIT COMMAND
-# ============================================================
 @cli.command()
 def init():
     """Initializes a .cwm folder in the current directory."""
@@ -96,7 +83,6 @@ def init():
 def ensure_global_folder():
     """Ensure global fallback folder exists with safety checks."""
     if not GLOBAL_CWM_BANK.exists():
-        # Only verify permission/create if it doesn't exist to save time
         click.echo("Creating global CWM bank...")
         success = safe_create_cwm_folder(GLOBAL_CWM_BANK)
         if success:
@@ -104,19 +90,46 @@ def ensure_global_folder():
         else:
             click.echo("ERROR: Could not create global CWM bank.")
 
-# Run the global check on import (so it happens for every command)
 ensure_global_folder()
 
-
-# ============================================================
-# HELLO COMMAND
-# ============================================================
 @cli.command()
 def hello():
     """Test command."""
     click.echo(f"Hello! Welcome to CWM (v{__version__}), your command watch manager.")
-    click.echo("touch some grass")
+    
+    os_name = platform.system()
+    os_release = platform.release()
+    click.echo(f"System: {os_name} {os_release}")
 
+    hist_path = get_history_file_path()
+    if hist_path:
+        name = hist_path.name
+        if "ConsoleHost_history" in name:
+            shell = "PowerShell"
+        elif ".bash_history" in name:
+            shell = "Bash"
+        elif ".zsh_history" in name:
+            shell = "Zsh"
+        else:
+            shell = "Unknown Shell"
+            
+        click.echo(f"Detected Shell: {shell}")
+        click.echo(f"History Source: {hist_path}")
+    else:
+        click.echo("History Source: None (Could not detect a supported shell history file)")
+    
+    if os.name == 'nt':
+             click.echo("")
+             click.echo(click.style("NOTE: Command Prompt (cmd.exe) is not supported for history features.", fg="yellow"))
+             click.echo("It does not write history to a file. Please use PowerShell or Git Bash.")
+
+    # --- CHECK SYNC STATUS ---
+    if not is_history_sync_enabled():
+        click.echo("")
+        click.echo(click.style("NOTICE: Real-time history tracking is not enabled.", fg="yellow"))
+        click.echo(click.style("Run 'cwm setup' to configure your shell automatically.", fg="yellow"))
+        click.echo(click.style(""))
+        click.echo("")
 
 # ============================================================
 # Register All Commands
@@ -127,10 +140,7 @@ cli.add_command(get_cmd)
 cli.add_command(watch_cmd)
 cli.add_command(bank_cmd)
 cli.add_command(clear_cmd)
+cli.add_command(setup_cmd)
 
-
-# ============================================================
-# MAIN ENTRY
-# ============================================================
 if __name__ == "__main__":
     cli()

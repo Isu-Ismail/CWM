@@ -10,7 +10,7 @@ from .utils import safe_create_cwm_folder, find_nearest_bank_path
 from typing import Tuple 
 
 CWM_FOLDER = ".cwm"
-GLOBAL_CWM_BANK = Path(os.getenv("APPDATA")) / "cwm"
+GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 
 class StorageManager:
     def __init__(self):
