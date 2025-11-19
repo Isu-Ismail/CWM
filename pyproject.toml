@@ -38,8 +38,6 @@ cwm = "cwm.cli:cli"
 "Homepage" = "https://github.com/Isu-Ismail/cwm"
 "Bug Tracker" = "https://github.com/Isu-Ismail/cwm/issues"
 
-# --- HATCHLING CONFIGURATION ---
-# This replaces [tool.setuptools.packages.find]
-# We explicitly map the 'src/cwm' folder to the 'cwm' package.
-[tool.hatch.build.targets.wheel.sources]
-"src/cwm" = "cwm"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cwm"]

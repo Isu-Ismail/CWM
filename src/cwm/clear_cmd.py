@@ -17,11 +17,10 @@ def _perform_clear(data_obj: dict, list_key: str, id_key: str,
         data_obj[id_key] = 0
         return initial_count
 
-    # Filter logic implies we identify what to KEEP
+   
     items_to_keep = []
     
-    # We iterate through the existing list. 
-    # If it matches the delete criteria, we skip it (delete it).
+    
     
     # Logic for -n (Clear first N / oldest N)
     # Since the list is chronological (oldest first), clearing first N is slicing
