@@ -46,78 +46,87 @@ CWM is a command-line tool designed to bring powerful history, saving, and sessi
 
 ---
 
-## ╰(*°▽°*)╯Command Reference
+## ╰(*°▽°*)╯ Command Reference
 
 ### Initialization & Core
 | Command | Action | Example |
 | :--- | :--- | :--- |
-| `cwm hello` | Displays welcome and current version. | `cwm hello` |
+| `cwm hello` | Displays welcome, version, and system info. | `cwm hello` |
 | `cwm init` | Initializes a new **Local Bank** (`.cwm` folder). | `cwm init` |
-| `cwm setup` | **(Linux/Mac)** Configures shell for instant history sync. | `cwm setup` |
+| `cwm setup` | **(Linux/Mac/GitBash)** Configures shell for instant history sync. | `cwm setup` |
+| `cwm config --shell` | Selects the preferred history file to read from. | `cwm config --shell` |
+| `cwm config --stop-warning` | Disables the "large history file" warning. | `cwm config --stop-warning` |
 
 ---
 
 ### Saving Commands (`cwm save`)
-This dispatcher handles saving, editing, and history caching. All action flags are mutually exclusive.
+Handles saving to local bank, caching history, and managing global archives.
 
 | Flag / Payload | Description | Example |
 | :--- | :--- | :--- |
-| (none) | Saves a raw command or names a variable. | `cwm save my_cmd="ls -la"` |
-| `-l` | Lists all saved commands (does not require a payload). | `cwm save -l` |
+| (none) | Saves a raw command or variable. | `cwm save my_cmd="ls -la"` |
+| `-l` | Lists all saved commands (local bank). | `cwm save -l` |
 | `-e <var=cmd>` | Edits the command string for an existing variable. | `cwm save -e my_cmd="ls -al"` |
 | `-ev <old> <new>` | Renames an existing variable. | `cwm save -ev my_cmd new_cmd` |
-| `-b <var>` | Saves the last command from **live** shell history to a new variable. | `cwm save -b last_run` |
-| `--hist -n` | Saves new commands from shell history to CWM cache (`history.json`). | `cwm save --hist -n 5` |
+| `-b <var>` | Saves the *last command* from live shell history. | `cwm save -b last_run` |
+| `--hist -n` | Saves new commands from live history to CWM cache (`history.json`). | `cwm save --hist -n 5` |
+| `--archive` | **Smart Archive:** Deduplicates live history and moves it to the Global Bank archives. | `cwm save --archive` |
 
 ---
 
 ### Retrieving Commands (`cwm get`)
-This is the central command for all "read" operations, capable of accessing saved commands, live history, or cached history.
+Central command for reading. Automatically copies to clipboard unless `-s` is used.
 
 | Flag / Argument | Mode | Description | Example |
 | :--- | :--- | :--- | :--- |
-| **(none)** | Saved (Fast) | Prints or lists the entire bank if no argument is given. | `cwm get` |
-| `<var_name>` / `--id <id>` | Saved (Fast) | Prints a single saved command. | `cwm get my_cmd` |
-| `-c` | Saved (Fast) | **Copies** the retrieved command to the clipboard. | `cwm get --id 5 -c` |
-| `-l` | Saved (List) | Lists saved commands and prompts user to copy. | `cwm get -l` |
-| `--hist` | History (Live) | Reads **live** shell history, lists, and prompts user to copy. | `cwm get --hist` |
-| `--hist -a` | History (Active) | Reads history **only** since the last `cwm watch start`. | `cwm get --hist -a` |
-| `--hist --cached` | History (Cache) | Reads history from the CWM cache (`history.json`). | `cwm get --hist --cached` |
-| `-n <count>` | Filter | Shows the last N commands (e.g., `-n 5`). | `cwm get --hist -n 5` |
-| `-f <filter>` | Filter | Filters commands containing the specified string. | `cwm get -l -f "deploy"` |
+| **(none)** | Saved | Defaults to listing saved commands (`-l`). | `cwm get` |
+| `<name>` / `--id` | Saved | **Copies** a single command to clipboard. | `cwm get my_cmd` |
+| `-s` | Saved | **Shows** the command without copying. | `cwm get my_cmd -s` |
+| `-l` | Saved | Lists saved commands and prompts to copy. | `cwm get -l` |
+| `-t <tag>` | Saved | Filters the list by tag. | `cwm get -t dev` |
+| `--hist` | History | Lists **live** shell history and prompts to copy. | `cwm get --hist` |
+| `--hist -a` | Active | Lists history **only** from the active watch session. | `cwm get --hist -a` |
+| `--cached` | Cache | Reads from `history.json` cache instead of live history. | `cwm get --hist --cached` |
+| `--arch` | Archive | Lists all global archives (or shows Latest if no ID). | `cwm get --arch` |
+| `--arch <id>` | Archive | Lists commands from a specific archive ID. | `cwm get --arch 1` |
+| `-n`, `-f`, `-ex` | Filter | Common filters (Count, Filter string, Exclude string). | `cwm get --hist -f "git"` |
+
+---
+
+### Context Packer (`cwm copy`)
+Scans your project and packs code files into the clipboard for LLMs.
+
+| Flag | Description | Example |
+| :--- | :--- | :--- |
+| (none) | Opens the interactive file tree. Select IDs to copy. | `cwm copy` |
+| `--init` | Creates/Resets `.cwmignore` with defaults. | `cwm copy --init` |
+| `<ids>` | Manual mode. Copies specific file/folder IDs (comma-separated). | `cwm copy 1,5,8` |
+| `--tree` | Copies the visual file tree structure only. | `cwm copy --tree` |
+| `--condense` | Minifies code (removes comments/whitespace) to save tokens. | `cwm copy 1,2 --condense` |
+| `-f <filter>` | Filters the displayed tree. | `cwm copy -f "src"` |
 
 ---
 
 ### Watch Mode (`cwm watch`)
-Manages the state of a command session using the `watch_session.json` file.
+Session tracking without background processes.
 
-| Command | Action | Behavior | Example |
-| :--- | :--- | :--- | :--- |
-| `cwm watch start` | Starts a session. | **Condition:** Must run after `cwm init`. Marks the current history line as the starting point. | `cwm watch start` |
-| `cwm watch status` | Reports session state. | Shows if the session is **ACTIVE** or **INACTIVE**. | `cwm watch status` |
-| `cwm watch stop` | Stops the session. | Stops tracking and resets the starting line to 0. | `cwm watch stop` |
-| `cwm watch stop --save` | Stops and saves. | Stops tracking, reads all commands since `cwm watch start`, filters them, and saves them to the history cache. | `cwm watch stop --save` |
-
----
-
-### Backup Management (`cwm backup`)
-View and merge data versions interactively.
-
-| Command | Action | Behavior | Example |
-| :--- | :--- | :--- | :--- |
-| `cwm backup list` | List all backups. | Shows unique ID, timestamp, and a command sneak peek. | `cwm backup list` |
-| `cwm backup show -l` | List & Show | Lists backups and prompts user for a number to show content. | `cwm backup show -l` |
-| `cwm backup show --latest` | Show Single | Shows the commands inside the newest backup file. | `cwm backup show --latest` |
-| `cwm backup merge -l` | Merge (Single) | Lists backups and prompts user for a single number to merge. | `cwm backup merge -l` |
-| `cwm backup merge --chain -l` | Merge (Chain) | Lists backups and prompts for a comma-separated list of numbers (e.g., `1,3,2`) to merge sequentially. **Aborts on invalid input.** | `cwm backup merge --chain -l` |
+| Command | Description |
+| :--- | :--- |
+| `cwm watch start` | Starts a session by marking the current history line. |
+| `cwm watch status` | Shows if a session is **ACTIVE** and the start line. |
+| `cwm watch stop` | Stops the session. |
+| `cwm watch stop --save` | Stops and saves session commands to `history.json`. |
 
 ---
 
-### Bank & Data Management
-Manage your storage locations and clean up data.
+### Backup & Data (`cwm backup`, `cwm bank`, `cwm clear`)
+Manage data integrity and locations.
 
 | Command | Action | Description |
 | :--- | :--- | :--- |
-| `cwm bank info` | Info | Shows the location of your Active and Global banks. |
-| `cwm bank delete` | Delete | **(Danger)** Permanently deletes a bank (`--local` or `--global`). |
-| `cwm clear` | Clear | Clears commands from `saved_cmds.json` (`--saved`) or `history.json` (`--hist`). Requires `-n`, `-f`, or `--all`. |
+| `cwm backup list` | List | Lists backups for `saved_cmds.json`. |
+| `cwm backup merge` | Merge | Interactive tool to merge backups (`-l`, `--chain`). |
+| `cwm bank info` | Info | Shows Local and Global bank paths. |
+| `cwm bank delete` | Delete | **(Danger)** Deletes a bank (`--local` or `--global`). |
+| `cwm clear` | Clear | Bulk deletes commands from saved/history (`-n`, `-f`, `--all`). |
+
