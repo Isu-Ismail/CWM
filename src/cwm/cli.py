@@ -21,6 +21,8 @@ from .watch_cmd import watch_cmd
 from .bank_cmd import bank_cmd
 from .clear_cmd import clear_cmd
 from .setup_cmd import setup_cmd
+from .config_cmd import config_cmd
+from .copy_cmd import copy_cmd
 
 CWM_BANK = ".cwm"
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
@@ -141,6 +143,8 @@ cli.add_command(watch_cmd)
 cli.add_command(bank_cmd)
 cli.add_command(clear_cmd)
 cli.add_command(setup_cmd)
+cli.add_command(config_cmd)
+cli.add_command(copy_cmd)
 
 if __name__ == "__main__":
     cli()

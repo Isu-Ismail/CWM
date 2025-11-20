@@ -5,3 +5,5 @@ test_bank/
 run_logs.txt
 run_tests.bat
 dist/
+.cwmignore
+.geminiignore

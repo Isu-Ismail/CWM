@@ -3,4 +3,4 @@ rich
 click
 colorama
 pyperclip
-
+pathspec

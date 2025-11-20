@@ -24,6 +24,16 @@ class StorageManager:
         self.fav_file        = self.data_path / "fav_cmds.json"
         self.cached_history_file = self.data_path / "history.json"
         self.watch_session_file = self.data_path / "watch_session.json"
+
+        self.config_file = self.bank_path / "config.json"
+
+        self.global_data_path = GLOBAL_CWM_BANK / "data"
+        self.archives_folder = self.global_data_path / "archives"
+        self.archived_data_file = self.archives_folder / "archive_index.json"
+        
+        if not self.archives_folder.exists():
+            self.archives_folder.mkdir(parents=True, exist_ok=True)
+        
         
         safe_create_cwm_folder(self.bank_path, repair=True)
 
@@ -200,3 +210,54 @@ class StorageManager:
             if bak["id"] == short_id:
                 return bak["full_path"]
         return None
+    
+    def get_config(self) -> dict:
+        try:
+            return json.loads(self.config_file.read_text())
+        except:
+            return {}
+
+    def update_config(self, key: str, value):
+        config = self.get_config()
+        config[key] = value
+        try:
+            self.config_file.write_text(json.dumps(config, indent=2))
+        except Exception as e:
+            click.echo(f"Error saving config: {e}", err=True)
+
+    # --- ARCHIVE METHODS ---
+    def load_archive_index(self) -> dict:
+        """Loads the global archive index."""
+        return self._load_json(
+            self.archived_data_file,
+            default={"last_archive_id": 0, "archives": []}
+        )
+
+    def save_archive_index(self, data: dict):
+        """Saves the global archive index."""
+        self._save_json(self.archived_data_file, data)
+
+    def create_archive_file(self, lines: list, archive_id: int) -> Path:
+        """Writes a list of commands to a text file in the global repo."""
+        filename = f"archive_{archive_id}.txt"
+        path = self.archives_folder / filename
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+        
+    def get_archive_path(self, filename: str) -> Path:
+        return self.archives_folder / filename
+    
+
+    def set_preferred_history(self, path: Path):
+        """Updates config.json with the selected history file."""
+        config_file = self.bank_path / "config.json"
+        try:
+            if config_file.exists():
+                data = json.loads(config_file.read_text())
+            else:
+                data = {}
+            
+            data["history_file"] = str(path)
+            self._save_json(config_file, data)
+        except Exception as e:
+            click.echo(f"Error saving config: {e}", err=True)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cwm-cli"
-version = "1.0.0"
+version = "0.0.1"
 description = "Command Watch Manager - Track, save, and retrieve your shell commands."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -28,7 +28,8 @@ dependencies = [
     "colorama",
     "prompt_toolkit",
     "rich",
-    "pyperclip"
+    "pyperclip",
+    "pathspec",
 ]
 
 [project.scripts]
