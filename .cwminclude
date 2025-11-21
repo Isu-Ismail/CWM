@@ -1,0 +1,8 @@
+#--- CWM Include File ---
+#Specify folders to include in the scan.
+#If populated, CWM will ONLY scan these folders.
+#Instructions:
+#1. Enter relative paths from project root.
+#2. Folders MUST end with a trailing slash (/).
+#Example:
+#src/

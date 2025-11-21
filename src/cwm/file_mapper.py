@@ -4,104 +4,239 @@ import pathspec
 from pathlib import Path
 from typing import List, Dict
 
-# Default ignore patterns
-# Added ".*" to ignore hidden files/folders by default
-DEFAULT_IGNORE = [
-    ".*",        # Ignore .git, .env, .vscode, etc.
-    "__pycache__/",
-    "*.pyc",
-    "node_modules/",
-    "venv/",
-    "dist/",
-    "build/",
-    "*.log",
-    "*.lock"
+# --- 1. CONSTANTS & CONFIGURATION ---
+ALWAYS_IGNORE = [
+    ".git/",
+    ".cwm/",
+    ".env",
+    ".DS_Store",
+    "Thumbs.db"
 ]
+
+BASE_GENERATED_IGNORE = [
+    "# --- CWM Global ---",
+    ".git/",
+    ".cwm/",
+    ".env",
+    ".DS_Store",
+    "Thumbs.db",
+    "*.log"
+]
+
+SMART_RULES = {
+    "package.json": ["\n# --- Node.js ---", "node_modules/", "dist/", "build/", "coverage/", "npm-debug.log*", "yarn-error.log*"],
+    "requirements.txt": ["\n# --- Python ---", "__pycache__/", "*.pyc", "venv/", ".venv/", "env/", "dist/", "build/", "*.egg-info/", ".pytest_cache/", ".coverage"],
+    "pyproject.toml": ["\n# --- Python (Modern) ---", "__pycache__/", "*.pyc", "venv/", ".venv/", "dist/", "build/", "*.egg-info/"],
+    "pubspec.yaml": ["\n# --- Flutter/Dart ---", ".dart_tool/", ".idea/", "build/", "ios/Flutter/Generated.xcconfig", "*.iml"],
+    "pom.xml": ["\n# --- Java (Maven) ---", "target/", "*.class", ".idea/"],
+    "Cargo.toml": ["\n# --- Rust ---", "target/", "Cargo.lock"],
+    "go.mod": ["\n# --- Go ---", "bin/", "vendor/"]
+}
+
+PROJECT_MARKERS = {
+    "python": ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile"],
+    "node": ["package.json", "yarn.lock", "package-lock.json"],
+    "flutter": ["pubspec.yaml"],
+    "java": ["pom.xml", "build.gradle"],
+    "go": ["go.mod"],
+    "rust": ["Cargo.toml"]
+}
 
 class FileMapper:
     def __init__(self, root_path: Path):
         self.root = root_path.resolve()
-        self.ignore_spec = self._load_spec(".cwmignore", DEFAULT_IGNORE)
-        self.include_spec = self._load_spec(".cwminclude", [])
+        self.safety_spec = pathspec.PathSpec.from_lines('gitwildmatch', ALWAYS_IGNORE)
+        
+        # Load configs
+        self.ignore_spec = self._load_spec(".cwmignore")
+        self.include_paths = self._load_include_paths() # Returns list of Paths
+        
         self.id_map: Dict[str, Path] = {} 
         self.tree_lines: List[str] = []
-        self.raw_tree_str: str = ""
+        self.clean_tree_str: str = "" 
 
-    def _load_spec(self, filename, defaults):
+    def _load_spec(self, filename):
         path = self.root / filename
-        patterns = []
         if path.exists():
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     patterns = f.read().splitlines()
+                return pathspec.PathSpec.from_lines('gitwildmatch', patterns)
             except:
                 pass
-        
-        if not patterns:
-            patterns = defaults
-            
-        if not patterns:
-            return None
-            
-        return pathspec.PathSpec.from_lines('gitwildmatch', patterns)
+        return None
 
-    def _should_process(self, path: Path) -> bool:
-        """Determines if a path should be included in the scan."""
+    def _load_include_paths(self) -> List[Path]:
+        """
+        Loads .cwminclude and accepts ONLY valid folder paths.
+        
+        - Ignores file names completely (like __init__.py)
+        - Ignores plain text or unknown keywords
+        - Requires trailing slash
+        - Normalizes hidden characters (BOM, CRLF, zero-width)
+        - Converts Windows slashes to POSIX
+        - Ensures path exists and is a directory
+        """
+
+        include_file = self.root / ".cwminclude"
+        if not include_file.exists():
+            return []
+
+        valid_folders = []
+
+        try:
+            with open(include_file, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+
+            for raw in lines:
+
+                # --- Clean hidden characters ---
+                line = (
+                    raw.replace("\ufeff", "")    # BOM
+                    .replace("\u200b", "")    # zero-width space
+                    .replace("\t", "")        # tabs
+                    .strip()
+                )
+
+                if not line or line.startswith("#"):
+                    continue
+
+                # Must end with "/" — skip anything else (including files)
+                if not line.endswith("/"):
+                    print(f"DEBUG include ✗ Skipped (not a folder): '{raw}'")
+                    continue
+
+                # Normalize slashes
+                line = line.replace("\\", "/")
+
+                # Remove trailing CR or spaces safely
+                line = line.rstrip("\r").rstrip("\n").strip()
+
+                # Now enforce trailing slash (in case CR removed it)
+                if not line.endswith("/"):
+                    line += "/"
+
+                # Resolve folder path
+                target = (self.root / line).resolve()
+
+                # Must exist and must be a directory
+                if target.exists() and target.is_dir():
+                    valid_folders.append(target)
+                    print(f"DEBUG include ✓ Folder added: '{line}'")
+                else:
+                    print(f"DEBUG include ✗ Not a valid folder: '{raw}'")
+
+        except Exception as e:
+            print("ERROR reading .cwminclude:", e)
+
+        return valid_folders
+
+
+    def _detect_project_type(self) -> str:
+        for lang, markers in PROJECT_MARKERS.items():
+            for marker in markers:
+                if (self.root / marker).exists():
+                    return lang
+        return "generic"
+
+    def _is_ignored(self, path: Path) -> bool:
         try:
             rel_path = path.relative_to(self.root)
-            # Add trailing slash for directory matching consistency
             check_path = str(rel_path) + ("/" if path.is_dir() else "")
             
-            # 1. Check Ignore (Exclude)
-            if self.ignore_spec.match_file(check_path):
-                return False
-            
-            # 2. Check Include (Allowlist) - ONLY if .cwminclude exists
-            if self.include_spec:
-                # If .cwminclude exists, file MUST match it to be shown
-                if not self.include_spec.match_file(check_path):
-                    return False
-                    
-            return True
-        except ValueError:
+            if self.safety_spec.match_file(check_path): return True
+            if self.ignore_spec and self.ignore_spec.match_file(check_path): return True
             return False
+        except ValueError:
+            return True
 
     def scan(self):
+        """
+        Targeted Scan: Only scans folders in .cwminclude (or root if empty).
+        Reconstructs tree showing relative paths for clarity.
+        """
         self.id_map = {}
         self.tree_lines = []
+        clean_lines = []
+        
+        valid_files = []
+        
+        # 1. Determine Targets
+        scan_targets = self.include_paths
+        if not scan_targets:
+            scan_targets = [self.root]
+
+        # 2. Scan Targets
+        for target in scan_targets:
+            # Walk ONLY this target folder
+            for root, dirs, files in os.walk(target):
+                # Prune ignored dirs in-place
+                dirs[:] = [d for d in dirs if not self._is_ignored(Path(root) / d)]
+                
+                for f in files:
+                    full_path = Path(root) / f
+                    if not self._is_ignored(full_path):
+                        valid_files.append(full_path)
+
+        # Sort files for consistent tree
+        valid_files.sort(key=lambda p: (len(p.parts), p.name))
+        
+        if not valid_files:
+            return 
+
+        # 3. Build Hierarchy Dict
+        tree_structure = {}
+        for path in valid_files:
+            rel_path = path.relative_to(self.root)
+            parts = rel_path.parts
+            current_level = tree_structure
+            for part in parts:
+                if part not in current_level:
+                    current_level[part] = {}
+                current_level = current_level[part]
+
+        # 4. Render Tree
         current_id = 1
         
-        root_name = self.root.name
-        self.tree_lines.append(f"[{current_id}] {root_name}/")
+        # Root Node
         self.id_map[str(current_id)] = self.root
+        self.tree_lines.append(f"[{current_id}] {self.root.name}/")
+        clean_lines.append(f"{self.root.name}/")
         current_id += 1
-        
-        def _walk(directory: Path, prefix: str = ""):
-            nonlocal current_id
-            try:
-                entries = sorted(list(directory.iterdir()), key=lambda x: (not x.is_dir(), x.name.lower()))
-            except PermissionError:
-                return
 
-            # Filter entries based on ignore/include rules
-            entries = [e for e in entries if self._should_process(e)]
+        def _render_node(node: dict, prefix: str, current_path: Path):
+            nonlocal current_id
             
-            count = len(entries)
-            for i, entry in enumerate(entries):
+            # Sort: Dirs first, then files
+            keys = list(node.keys())
+            keys.sort(key=lambda x: (0 if (current_path / x).is_dir() else 1, x.lower()))
+
+            count = len(keys)
+            for i, name in enumerate(keys):
                 is_last = (i == count - 1)
+                full_child_path = current_path / name
+                
                 cid = str(current_id)
-                self.id_map[cid] = entry
+                self.id_map[cid] = full_child_path
                 current_id += 1
                 
                 connector = "└── " if is_last else "├── "
-                self.tree_lines.append(f"{prefix}{connector}[{cid}] {entry.name}")
                 
-                if entry.is_dir():
+                # Display Logic:
+                # If it's a top-level include target, showing just the name might be confusing.
+                # But since we reconstructed the tree from root, it will naturally show
+                # src -> cwm -> utils.py, which resolves the ambiguity.
+                
+                self.tree_lines.append(f"{prefix}{connector}[{cid}] {name}")
+                clean_lines.append(f"{prefix}{connector}{name}")
+                
+                children = node[name]
+                if children: # It is a directory
                     extension = "    " if is_last else "│   "
-                    _walk(entry, prefix + extension)
+                    _render_node(children, prefix + extension, full_child_path)
 
-        _walk(self.root)
-        self.raw_tree_str = "\n".join(self.tree_lines)
+        _render_node(tree_structure, "", self.root)
+        self.clean_tree_str = "\n".join(clean_lines)
 
     def resolve_ids(self, id_list: List[str]) -> List[Path]:
         selected_paths = set()
@@ -109,7 +244,7 @@ class FileMapper:
             i = i.strip()
             if i in self.id_map:
                 selected_paths.add(self.id_map[i])
-                
+        
         final_files = set()
         sorted_paths = sorted(list(selected_paths), key=lambda p: len(p.parts))
         processed_roots = []
@@ -127,17 +262,55 @@ class FileMapper:
                 for root, _, files in os.walk(p):
                     for f in files:
                         full_path = Path(root) / f
-                        # Re-check visibility for recursive files
-                        if self._should_process(full_path):
+                        if not self._is_ignored(full_path):
                             final_files.add(full_path)
             elif p.is_file():
                 final_files.add(p)
-                
         return sorted(list(final_files))
 
-    def create_ignore_file(self):
-        path = self.root / ".cwmignore"
-        if not path.exists():
-            path.write_text("\n".join(DEFAULT_IGNORE), encoding="utf-8")
-            return True
-        return False
+    def initialize_config(self) -> str:
+        """Creates .cwmignore and .cwminclude with instructions."""
+        ignore_target = self.root / ".cwmignore"
+        include_target = self.root / ".cwminclude"
+        
+        if not include_target.exists():
+            include_content = [
+                "# --- CWM Include File ---",
+                "# Specify folders to include in the scan.",
+                "# If populated, CWM will ONLY scan these folders.",
+                "# Instructions:",
+                "# 1. Enter relative paths from project root.",
+                "# 2. Folders MUST end with a trailing slash (/).",
+                "# Example:",
+                "# src/",
+                ""
+            ]
+            include_target.write_text("\n".join(include_content), encoding="utf-8")
+
+        if ignore_target.exists():
+            return "exists"
+
+        content_lines = []
+        source_type = "default"
+        
+        gitignore = self.root / ".gitignore"
+        if gitignore.exists():
+            try:
+                content_lines = gitignore.read_text(encoding='utf-8').splitlines()
+                source_type = ".gitignore"
+            except: pass
+        
+        if not content_lines:
+            # Smart Template Logic
+            content_lines = list(BASE_GENERATED_IGNORE)
+            found_any = False
+            for marker, rules in SMART_RULES.items():
+                if (self.root / marker).exists():
+                    content_lines.extend(rules)
+                    found_any = True
+            if not found_any:
+                source_type = "Generic Defaults"
+                content_lines.extend(["node_modules/", "venv/", "__pycache__/"])
+        
+        ignore_target.write_text("\n".join(content_lines), encoding="utf-8")
+        return source_type
