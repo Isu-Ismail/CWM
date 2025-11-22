@@ -133,3 +133,82 @@ def get_git_remote_url() -> Optional[str]:
         return result.stdout.strip()
     except:
         return None
+    
+
+TEMPLATES = {
+    "Python": """
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+*.log
+.idea/
+.vscode/
+dist/
+build/
+*.egg-info/
+""",
+    "Node": """
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.env
+.DS_Store
+.idea/
+.vscode/
+coverage/
+""",
+    "Flutter": """
+.dart_tool/
+.packages
+.pub/
+build/
+ios/Flutter/Generated.xcconfig
+android/gradle/
+.idea/
+.vscode/
+""",
+    "Go": """
+bin/
+pkg/
+vendor/
+go.sum
+.idea/
+.vscode/
+""",
+    "Rust": """
+/target
+**/*.rs.bk
+Cargo.lock
+.idea/
+.vscode/
+""",
+    "Generic": """
+.env
+.DS_Store
+.idea/
+.vscode/
+*.log
+dist/
+build/
+"""
+}
+
+def detect_project_type(path: Path) -> str:
+    """Auto-detects project type based on files."""
+    if (path / "package.json").exists(): return "Node"
+    if (path / "requirements.txt").exists() or (path / "pyproject.toml").exists(): return "Python"
+    if (path / "pubspec.yaml").exists(): return "Flutter"
+    if (path / "go.mod").exists(): return "Go"
+    if (path / "Cargo.toml").exists(): return "Rust"
+    return "Generic"
+
+def get_gitignore_content(template_name: str) -> str:
+    """Returns the content for the selected template."""
+    return TEMPLATES.get(template_name, TEMPLATES["Generic"]).strip()
