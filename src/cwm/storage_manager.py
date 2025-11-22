@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import json.decoder
-from .utils import safe_create_cwm_folder, find_nearest_bank_path
+from .utils import safe_create_cwm_folder, find_nearest_bank_path,DEFAULT_CONFIG
 from typing import Tuple 
 
 CWM_FOLDER = ".cwm"
@@ -26,10 +26,13 @@ class StorageManager:
         self.watch_session_file = self.data_path / "watch_session.json"
 
         self.config_file = self.bank_path / "config.json"
+        
 
         self.global_data_path = GLOBAL_CWM_BANK / "data"
         self.archives_folder = self.global_data_path / "archives"
+        self.projects_file = self.global_data_path / "projects.json"
         self.archived_data_file = self.archives_folder / "archive_index.json"
+        self._ensure_config_defaults()
         
         if not self.archives_folder.exists():
             self.archives_folder.mkdir(parents=True, exist_ok=True)
@@ -67,6 +70,35 @@ class StorageManager:
             click.echo(f"Unexpected error loading {file.name}: {e}. Restoring...")
             return self._restore_from_backup(file, default)
 
+
+    def _ensure_config_defaults(self):
+        """
+        Checks if config.json is missing keys (markers, editor)
+        and backfills them without overwriting your history_file setting.
+        """
+        if not self.config_file.exists():
+            return
+
+        try:
+            current_data = json.loads(self.config_file.read_text())
+            modified = False
+
+            # Check every key in our DEFAULT_CONFIG
+            for key, default_val in DEFAULT_CONFIG.items():
+                if key not in current_data:
+                    current_data[key] = default_val
+                    modified = True
+            
+            # Special check: Ensure markers list isn't empty if the key exists but is null
+            if not current_data.get("project_markers"):
+                current_data["project_markers"] = DEFAULT_CONFIG["project_markers"]
+                modified = True
+
+            if modified:
+                self.config_file.write_text(json.dumps(current_data, indent=2))
+                # Optional: Silent update, user will see it next time they open the file
+        except Exception:
+            pass # Fail safe if file is corrupted
 
     def _save_json(self, file: Path, data):
         try:
@@ -261,3 +293,23 @@ class StorageManager:
             self._save_json(config_file, data)
         except Exception as e:
             click.echo(f"Error saving config: {e}", err=True)
+
+    def load_projects(self) -> dict:
+            """Loads the global projects database."""
+            return self._load_json(
+                self.projects_file,
+                default={"last_id": 0, "projects": []}
+            )
+
+    def save_projects(self, data: dict):
+        """Saves the global projects database."""
+        if not self.global_data_path.exists():
+            self.global_data_path.mkdir(parents=True, exist_ok=True)
+        self._save_json(self.projects_file, data)
+
+    # Helper to get markers (Robust fallback)
+    def get_project_markers(self) -> list:
+        config = self.get_config()
+        # It should be in the file now thanks to _ensure_config_defaults
+        return config.get("project_markers", DEFAULT_CONFIG["project_markers"])
+    

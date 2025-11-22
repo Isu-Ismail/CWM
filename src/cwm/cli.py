@@ -23,6 +23,9 @@ from .clear_cmd import clear_cmd
 from .setup_cmd import setup_cmd
 from .config_cmd import config_cmd
 from .copy_cmd import copy_cmd
+from .git_cmd import git_cmd
+from .project_cmd import project_cmd # <--- NEW
+from .jump_cmd import jump_cmd
 
 CWM_BANK = ".cwm"
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
@@ -44,9 +47,17 @@ class CwmGroup(click.Group):
         else:
             ctx.fail(f"Unknown command '{cmd_name}'. Run 'cwm --help' for a list of commands.")
 
+CONTEXT_SETTINGS = dict(
+    help_option_names=["-h", "--help" ,"hello"],
+    max_content_width=2000   # SUPER IMPORTANT — prevents wrapping
+)
+
 @click.group(
     cls=CwmGroup,
-    epilog="For full documentation and issues, visit: https://github.com/Isu-Ismail/cwm"
+    context_settings=CONTEXT_SETTINGS,
+    epilog=(
+        "For full documentation and issues,visit:https://isu-ismail.github.io/cwm-docwebsite/"
+    )
 )
 @click.version_option(version=__version__, prog_name="cwm")
 def cli():
@@ -145,6 +156,9 @@ cli.add_command(clear_cmd)
 cli.add_command(setup_cmd)
 cli.add_command(config_cmd)
 cli.add_command(copy_cmd)
+cli.add_command(git_cmd)
+cli.add_command(project_cmd) # <--- NEW
+cli.add_command(jump_cmd)
 
 if __name__ == "__main__":
     cli()
