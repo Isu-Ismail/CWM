@@ -66,6 +66,9 @@ def _clear_config(path: Path):
         return True
     return False
 
+global_config_path = GLOBAL_CWM_BANK/"config.json"
+
+
 @click.command("config")
 @click.option("--shell", is_flag=True, help="Select preferred shell history file.")
 @click.option("--stop-warning", is_flag=True, help="Disable the large history warning.")
@@ -77,8 +80,15 @@ def _clear_config(path: Path):
 @click.option("--editor", help="Set the default editor command (e.g. 'code', 'vim').")
 @click.option("--add-marker", help="Add a project detection marker (e.g. 'go.mod').")
 @click.option("--remove-marker", help="Remove a project detection marker.")
+#new api options
+# @click.option("--gemini-key", help="Set the Gemini API key.")
+# @click.option("--openai-key", help="Set the OpenAI API key.")
+# @click.option("--stack-key", help="Set the Stack API key.")
+# @click.option("--google-search-key", help="Set the Google Search API key.")
+
 def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show, 
                editor, add_marker, remove_marker):
+            #    gemini_key,openai_key,stack_key,google_search_key)
     """
     Manage CWM configuration.
     
@@ -91,6 +101,7 @@ def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show
     target_path = manager.config_file # Default to Active
     target_name = "Active"
     
+
     if global_mode:
         target_path = GLOBAL_CWM_BANK / "config.json"
         target_name = "Global"
@@ -118,14 +129,26 @@ def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show
             data = json.loads(target_path.read_text()) if target_path.exists() else {}
         except: data = {}
 
-        cur_editor = data.get("default_editor", DEFAULT_CONFIG["default_editor"])
-        cur_markers = data.get("project_markers", DEFAULT_CONFIG["project_markers"])
+       
 
-        click.echo(f"\n--- Values in {target_name} Config ---")
-        click.echo(f"Config Path:    {target_path}")
-        click.echo(f"Default Editor: {cur_editor}")
-        click.echo(f"Project Markers: {', '.join(cur_markers)}")
-        
+        custom_markers ={
+        "history_file":"History FIle Path",
+        "default_editor":"Default Code editor",
+        "default_terminal":"Default Terminal",
+        "project_markers":"Project Markers",
+        "gemini_key":"Gemini API key",
+        "openai_key":"OpenAi API key",
+        "stack_key":"StackOverflow API key",
+        "google_search_key":"Google Search API key"
+        }
+
+        mask =["gemini_key","openai_key","stack_key","google_search_key"]
+
+        for key,value in data.items() :
+            if key in custom_markers and key in mask :
+                click.echo(f"{custom_markers[key]} : {value[1:10]}...")
+            else:
+                click.echo(f"{custom_markers[key]} : {value}")
         return
 
     # --- 2. HANDLE NEW OPTIONS ---
@@ -141,6 +164,38 @@ def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show
     if remove_marker:
         _modify_config_list(target_path, "project_markers", remove_marker, "remove")
         return
+    
+    #api-key setting logic
+    # API-key setting logic (direct only – no prompts)
+    # api_key_updates = {
+    #     "gemini_key": gemini_key,
+    #     "openai_key": openai_key,
+    #     "stack_key": stack_key,
+    #     "google_search_key": google_search_key,
+    # }
+
+    # key_was_set = False
+
+    # for key_name, key_value in api_key_updates.items():
+
+    #     # Only accept API keys explicitly given by user
+    #     if key_value is None or key_value == "":
+    #         continue  # User did NOT use this option, skip it
+
+    #     # Clean the value (remove quotes if user wrapped them)
+    #     value_to_store = key_value.strip('"').strip("'")
+
+    #     click.echo(f"Setting {key_name} from command line argument.")
+
+    #     # Save to Global Config
+    #     _write_config(global_config_path, key_name, value_to_store)
+
+    #     click.echo(f"{key_name} successfully set in Global config.")
+    #     key_was_set = True
+
+    # if key_was_set:
+    #     return
+
 
     # --- 3. CLEAR COMMANDS ---
     if clear_local:
@@ -189,6 +244,7 @@ def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show
                 click.echo("Invalid selection.")
         except click.Abort:
             click.echo("\nCancelled.")
+
     else:
         # If no options matched, show help prompt
         # (Only check this if we haven't already returned from logic above)

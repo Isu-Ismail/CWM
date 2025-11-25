@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     "history_file": None,
     "project_markers": [".git", ".cwm", ".cwm-project.txt"],
     "default_editor": "code",
-    "default_terminal": None
+    "default_terminal": None,
 }
 
 def _ensure_dir(p: Path):
