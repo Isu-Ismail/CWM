@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cwm-cli"
-version = "0.0.1"
-description = "Command Watch Manager - Track, save, and retrieve your shell commands."
+version = "1.1.0"
+description = "Command Watch Manager - Track, save, and manage you commands and projects"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
@@ -38,6 +38,7 @@ cwm = "cwm.cli:cli"
 [project.urls]
 "Homepage" = "https://github.com/Isu-Ismail/cwm"
 "Bug Tracker" = "https://github.com/Isu-Ismail/cwm/issues"
+"Documentation Page" = "https://isu-ismail.github.io/cwm-docwebsite/index.html"
 
 
 [tool.hatch.build.targets.wheel]

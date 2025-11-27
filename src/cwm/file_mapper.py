@@ -103,7 +103,7 @@ class FileMapper:
 
                 # Must end with "/" — skip anything else (including files)
                 if not line.endswith("/"):
-                    print(f"DEBUG include ✗ Skipped (not a folder): '{raw}'")
+                    print(f"✗ Skipped (not a folder): '{raw}'")
                     continue
 
                 # Normalize slashes
@@ -122,9 +122,9 @@ class FileMapper:
                 # Must exist and must be a directory
                 if target.exists() and target.is_dir():
                     valid_folders.append(target)
-                    print(f"DEBUG include ✓ Folder added: '{line}'")
+                    print(f"✓ Folder added: '{line}'")
                 else:
-                    print(f"DEBUG include ✗ Not a valid folder: '{raw}'")
+                    print(f"✗ Not a valid folder: '{raw}'")
 
         except Exception as e:
             print("ERROR reading .cwminclude:", e)

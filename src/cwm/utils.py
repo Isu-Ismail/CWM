@@ -14,6 +14,12 @@ DEFAULT_CONFIG = {
     "default_terminal": None,
 }
 
+# DEFAULT_CONFIG_LOCAL = {
+#     "history_file": None,
+# }
+
+
+
 def _ensure_dir(p: Path):
     """Create folder p if not exists."""
     p.mkdir(parents=True, exist_ok=True)
@@ -36,6 +42,7 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
             "history.json": {"last_sync_id": 0, "commands": []},
             "watch_session.json": {"isWatching": False, "startLine": 0}
         }
+
 
         config_file = folder_path / "config.json"
         if not config_file.exists():

@@ -1,4 +1,5 @@
 # src/cwm/jump_cmd.py
+import sys
 import click
 import subprocess
 import os
@@ -51,10 +52,40 @@ def _launch_terminal(path: str):
             else:
                 subprocess.Popen(["start", "cmd", "/k", f"cd /d {path}"], shell=True)
         else:
-            if shutil.which("gnome-terminal"):
-                subprocess.Popen(["gnome-terminal", "--working-directory", path])
-            elif shutil.which("open"): # Mac
-                subprocess.Popen(["open", "-a", "Terminal", path])
+            # --- MAC OS ---
+            if sys.platform == "darwin":
+                
+                if os.path.exists("/Applications/iTerm.app"):
+                     subprocess.Popen(["open", "-a", "iTerm", path])
+                else:
+                     subprocess.Popen(["open", "-a", "Terminal", path])
+            
+            # --- LINUX ---
+            else:
+                #common terminals
+                terminals = [
+                    "gnome-terminal", "konsole", "xfce4-terminal", 
+                    "terminator", "alacritty", "xterm"
+                ]
+                
+                launched = False
+                for term in terminals:
+                    if shutil.which(term):
+                        if term == "gnome-terminal":
+                            subprocess.Popen([term, "--working-directory", path])
+                        elif term == "konsole":
+                            subprocess.Popen([term, "--workdir", path])
+                        else:
+                            
+                            subprocess.Popen([term], cwd=path)
+                        
+                        click.echo(f"Opening {term}...")
+                        launched = True
+                        break
+                
+                if not launched:
+                    click.echo("Could not detect a supported terminal (Gnome, Konsole, Terminator, etc).")
+
     except Exception as e:
         click.echo(f"Failed to launch terminal: {e}")
 
@@ -118,15 +149,14 @@ def jump_cmd(names, terminal, list_mode, count):
 
         click.echo(header)
 
-        # --- NEW FORMATTING LOGIC ---
+#shows larger hits first 
         for p in display_list:
             hits = p.get('hits', 0)
             pid = p['id']
             alias = p['alias']
             path = p['path']
             
-            # Format: [ID] (Hits: X)   Alias ........ Path
-            # {alias:<25} ensures the name takes up 25 chars for alignment
+           
             click.echo(f" [{pid}] (Hits: {hits})  {alias:<25} : {path}")
         
         remaining = len(projects) - len(display_list)

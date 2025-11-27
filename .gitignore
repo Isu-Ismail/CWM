@@ -7,3 +7,5 @@ run_tests.bat
 dist/
 .cwmignore
 .geminiignore
+.cwm/
+.cwminclude

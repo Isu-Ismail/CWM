@@ -103,53 +103,68 @@ def scan_projects(root):
 def add_project(path, name):
     """
     Manually add a project folder.
+    Supports:  cwm project add .
     """
     manager = StorageManager()
-    
-    # --- FIX: CLEAN PATH INPUT ---
-    # 1. If path argument provided, clean it immediately
-    if path:
-        path = path.strip().strip('"').strip("'")
 
-    # 2. Interactive Prompt if Path is missing
+   
+    #  If no path given -> user must enter one
+    
     if not path:
-        # We accept a raw string (default) instead of click.Path
-        # This allows us to manually strip quotes from the user input
-        raw_input = click.prompt("Enter Project Path")
-        path = raw_input.strip().strip('"').strip("'")
+        path = click.prompt("Enter Project Path").strip()
 
-    target = Path(path).resolve()
+   
+    #  Special Case: "." means *current directory*
+   
+    if path == ".":
+        target = Path.cwd().resolve()
+    else:
+        # Clean quotes (Windows users often copy with quotes)
+        path = path.strip().strip('"').strip("'")
+        target = Path(path).resolve()
+
+   
+    # Validate folder
     
-    # 3. Now validate existence
     if not target.exists() or not target.is_dir():
         click.echo(f"Error: Invalid directory '{path}'.")
         return
 
     data = manager.load_projects()
     projects = data.get("projects", [])
-    
+
+    # Already exists?
     if any(p["path"] == str(target) for p in projects):
         click.echo("This path is already saved.")
         return
 
-    base_name = target.name
-    unique_suggestion = _get_unique_alias(base_name, projects)
+   
+    #  Alias handling
+    
+    default_alias = _get_unique_alias(target.name, projects)
 
     if not name:
-        name = click.prompt("Enter Project Alias", default=unique_suggestion)
-    
+        name = click.prompt("Enter Project Alias", default=default_alias)
+
     alias = _get_unique_alias(name, projects)
 
+    
+    # Save project
+   
     new_id = data.get("last_id", 0) + 1
     projects.append({
-        "id": new_id, "alias": alias, "path": str(target), "hits": 0
+        "id": new_id,
+        "alias": alias,
+        "path": str(target),
+        "hits": 0
     })
-    
+
     data["projects"] = projects
     data["last_id"] = new_id
     manager.save_projects(data)
-    click.echo(f"Added project '{alias}'.")
 
+    click.echo(f"Added project '{alias}' → {target}")
+    
 @project_cmd.command("list")
 def list_projects():
     """List all saved projects."""
@@ -168,9 +183,7 @@ def list_projects():
     for p in sorted_projs:
         click.echo(f"[{p['id']}] {p['alias']:<20} : {p['path']}")
 
-# src/cwm/project_cmd.py
 
-# ... (Previous imports and commands) ...
 
 @project_cmd.command("remove")
 @click.argument("target", required=False)
@@ -178,8 +191,7 @@ def list_projects():
 def remove_project(target, count):
     """
     Remove a saved project.
-    
-    Without arguments, lists projects with the LEAST hits.
+    Re-indexes IDs automatically to close gaps.
     """
     manager = StorageManager()
     data = manager.load_projects()
@@ -189,21 +201,19 @@ def remove_project(target, count):
         click.echo("No projects to remove.")
         return
 
+    removed_something = False
+
     # --- Path A: Direct Removal (Argument provided) ---
     if target:
-        # Find by ID or Alias
         found_idx = -1
         
-        # Try ID
         if target.isdigit():
             tid = int(target)
             for i, p in enumerate(projects):
                 if p["id"] == tid:
                     found_idx = i
                     break
-        
-        # Try Alias if not found
-        if found_idx == -1:
+        else:
             for i, p in enumerate(projects):
                 if p["alias"] == target:
                     found_idx = i
@@ -211,86 +221,96 @@ def remove_project(target, count):
         
         if found_idx != -1:
             removed = projects.pop(found_idx)
-            manager.save_projects(data)
             click.echo(f"Removed project: {removed['alias']}")
+            removed_something = True
         else:
             click.echo(f"Project '{target}' not found.")
-        return
+            return
 
-    # --- Path B: Interactive List (Least Hits) ---
-    
-    # Sort: Hits (Ascending) -> Show unused ones first
-    sorted_projs = sorted(projects, key=lambda x: (x.get("hits", 0), x["alias"]))
-    
-    # Determine Limit
-    limit = 10
-    is_all = False
-    
-    if str(count).lower() == "all":
-        limit = len(sorted_projs)
-        is_all = True
+    # --- Path B: Interactive List ---
     else:
-        try:
-            limit = int(count)
-            if limit <= 0: limit = 10
-        except ValueError:
-            limit = 10
-
-    display_list = sorted_projs[:limit]
-    
-    if is_all or limit >= len(projects):
-        header = f"--- All Projects ({len(projects)}) ---"
-    else:
-        header = f"--- Bottom {len(display_list)} Least Used Projects ---"
-
-    click.echo(header)
-
-    for p in display_list:
-        hits = p.get('hits', 0)
-        click.echo(f"[{p['id']}] (Hits: {hits})  {p['alias']:<20} : {p['path']}")
-
-    # Prompt
-    choice = click.prompt("\nEnter IDs/Aliases to REMOVE (comma-separated) or press Enter to cancel", default="", show_default=False)
-    
-    if not choice:
-        return
-
-    # Process Removal
-    tokens = choice.split(',')
-    to_remove_indexes = []
-    
-    # We collect indexes first, then remove them in reverse order to keep indexes valid
-    for token in tokens:
-        token = token.strip()
-        idx = -1
+        sorted_projs = sorted(projects, key=lambda x: (x.get("hits", 0), x["alias"]))
         
-        if token.isdigit():
-            tid = int(token)
-            for i, p in enumerate(projects):
-                if p["id"] == tid:
-                    idx = i
-                    break
+        limit = 10
+        is_all = False
+        
+        if str(count).lower() == "all":
+            limit = len(sorted_projs)
+            is_all = True
         else:
-            for i, p in enumerate(projects):
-                if p["alias"] == token:
-                    idx = i
-                    break
+            try:
+                limit = int(count)
+                if limit <= 0: limit = 10
+            except ValueError:
+                limit = 10
+
+        display_list = sorted_projs[:limit]
         
-        if idx != -1 and idx not in to_remove_indexes:
-            to_remove_indexes.append(idx)
+        if is_all or limit >= len(projects):
+            header = f"--- All Projects ({len(projects)}) ---"
+        else:
+            header = f"--- Bottom {len(display_list)} Least Used Projects ---"
 
-    if not to_remove_indexes:
-        click.echo("No valid projects selected.")
-        return
+        click.echo(header)
 
-    # Sort reverse so we don't shift indexes while popping
-    to_remove_indexes.sort(reverse=True)
-    
-    count_removed = 0
-    for idx in to_remove_indexes:
-        removed = projects.pop(idx)
-        click.echo(f"Removed: {removed['alias']}")
-        count_removed += 1
+        for p in display_list:
+            hits = p.get('hits', 0)
+            click.echo(f"[{p['id']}] (Hits: {hits})  {p['alias']:<20} : {p['path']}")
 
-    manager.save_projects(data)
-    click.echo(f"\nSuccessfully removed {count_removed} projects.")
+        choice = click.prompt("\nEnter IDs/Aliases to REMOVE (comma-separated) or press Enter to cancel", default="", show_default=False)
+        
+        if not choice:
+            return
+
+        tokens = choice.split(',')
+        to_remove_indexes = []
+        
+        for token in tokens:
+            token = token.strip()
+            idx = -1
+            
+            if token.isdigit():
+                tid = int(token)
+                for i, p in enumerate(projects):
+                    if p["id"] == tid:
+                        idx = i
+                        break
+            else:
+                for i, p in enumerate(projects):
+                    if p["alias"] == token:
+                        idx = i
+                        break
+            
+            if idx != -1 and idx not in to_remove_indexes:
+                to_remove_indexes.append(idx)
+
+        if not to_remove_indexes:
+            click.echo("No valid projects selected.")
+            return
+
+        to_remove_indexes.sort(reverse=True)
+        
+        count_removed = 0
+        for idx in to_remove_indexes:
+            removed = projects.pop(idx)
+            click.echo(f"Removed: {removed['alias']}")
+            count_removed += 1
+        
+        click.echo(f"\nSuccessfully removed {count_removed} projects.")
+        removed_something = True
+
+    # --- CRITICAL: RE-INDEX IDs ---
+    if removed_something:
+        click.echo("Re-indexing project IDs...")
+        
+        # Optional: Sort by existing ID to keep relative order stable
+        # projects.sort(key=lambda x: x['id']) 
+        
+        for index, p in enumerate(projects):
+            p["id"] = index + 1
+        
+        # Update the global counter
+        data["last_id"] = len(projects)
+        
+        manager.save_projects(data)
+        click.echo("Done.")
