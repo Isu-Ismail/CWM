@@ -3,35 +3,89 @@ import json
 import platform
 from pathlib import Path
 import click
-import shutil
 from typing import Tuple
 
 CWM_BANK_NAME = ".cwm"
+INSTRUCTION_FILE = "instruction.txt"  #
+
+DEFAULT_AI_INSTRUCTION="""You are DevBot, a senior developer's assistant. Follow these rules:
+*if user aks hello reply hello how can i help you today like this polite and simple.
+*Keep responses short, precise, and actionable.
+* Use bullet points or numbered steps for instructions.
+* When code is needed, show only the command or code on the next line without specifying language.
+* If something must be run in terminal, say "run this in terminal:" above the code.
+* No long intros, no long explanations unless asked.
+* If user gives code, analyze it and give direct fixes.
+* Do not use words like "comments" in explanations.
+* Do not use bold or extra markdown styling.
+* If a link is needed for download, include the link directly.
+* For navigation steps, use arrows like: settings -> display -> wallpaper.
+* For errors, check context similar to StackOverflow or official docs and give the simplest fix.
+* If user asks general questions (time, date, simple facts), give a one-line answer.
+* If no answer is found, say: no answer found.
+* Keep output token usage low while keeping enough detail to understand.
+"""
+
+# Master Defaults (Used by StorageManager for fallbacks)
 DEFAULT_CONFIG = {
     "history_file": None,
     "project_markers": [".git", ".cwm", ".cwm-project.txt"],
     "default_editor": "code",
     "default_terminal": None,
+    "suppress_history_warning": False,
+    "code_theme": "monokai",
+    
+    # --- AI Configuration (Nested) ---
+    "gemini": {
+        "model": None,
+        "key": None
+    },
+    "openai": {
+        "model": None,
+        "key": None
+    },
+    "local_ai": {
+        "model": None
+    },
+    "ai_instruction": DEFAULT_AI_INSTRUCTION
 }
 
-# DEFAULT_CONFIG_LOCAL = {
-#     "history_file": None,
-# }
+FILE_ATTRIBUTE_HIDDEN = 0x02
 
 
+def _ensure_dir(path: Path):
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
 
-def _ensure_dir(p: Path):
-    """Create folder p if not exists."""
-    p.mkdir(parents=True, exist_ok=True)
+def make_hidden(path: Path):
+    """
+    Sets the 'Hidden' attribute on Windows.
+    Safe to call repeatedly on folders or files.
+    """
+    if os.name == 'nt':
+        try:
+            import ctypes
+            # Convert Path to string and set attribute
+            # This hides the folder from standard Explorer views
+            ret = ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_HIDDEN)
+        except Exception:
+            pass
 
 def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
     """
-    Creates the CWM bank structure.
+    Creates the CWM bank structure and ensures it is HIDDEN.
+    Works for both Global (AppData) and Local (.cwm) banks.
     """
     try:
+        # 1. Create the main folder
+        _ensure_dir(folder_path)
+        
+        # 2. FORCE HIDE IT (Applies to both Global and Local)
+        make_hidden(folder_path)
+
         data_path = folder_path / "data"
         backup_path = data_path / "backup"
-        _ensure_dir(folder_path)
+        
         _ensure_dir(data_path)
         _ensure_dir(backup_path)
 
@@ -43,7 +97,6 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
             "watch_session.json": {"isWatching": False, "startLine": 0}
         }
 
-
         config_file = folder_path / "config.json"
         if not config_file.exists():
             config_file.write_text("{}")
@@ -54,6 +107,7 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
                 file.write_text(json.dumps(default_value, indent=2))
                 if repair:
                     click.echo(f"{fname} missing... recreated.")
+        
         return True
     except Exception as e:
         click.echo(f"Error creating CWM folder: {e}", err=True)

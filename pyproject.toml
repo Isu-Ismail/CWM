@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cwm-cli"
-version = "1.1.0"
-description = "Command Watch Manager - Track, save, and manage you commands and projects"
+version = "2.0.0"
+description = "Command Watch Manager - Workspace, History, and AI Assistant for Developers."
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
@@ -14,22 +14,38 @@ authors = [
   {name = "Ismail", email = "ismailisims1@gmail.com"},
 ]
 
-keywords = ["cli", "terminal", "history", "productivity", "manager"]
+keywords = ["cli", "terminal", "history", "productivity", "manager", "workspace", "git", "ai"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Utilities",
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
 
+# Core dependencies (Installed by default)
 dependencies = [
     "click",
     "colorama",
-    "prompt_toolkit",
-    "rich",
+    "prompt_toolkit",  
+    "rich",           
     "pyperclip",
     "pathspec",
+    
+]
+
+# Optional dependencies (Installed via pip install cwm-cli[ai])
+[project.optional-dependencies]
+ai = [
+    "google-genai",
+    "openai",
+    "ollama"
+]
+
+[project.optional-dependencies]
+gui = [
+    "flet",
+    "psutil"
 ]
 
 [project.scripts]
@@ -39,7 +55,6 @@ cwm = "cwm.cli:cli"
 "Homepage" = "https://github.com/Isu-Ismail/cwm"
 "Bug Tracker" = "https://github.com/Isu-Ismail/cwm/issues"
 "Documentation Page" = "https://isu-ismail.github.io/cwm-docwebsite/index.html"
-
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cwm"]

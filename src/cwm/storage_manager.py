@@ -8,6 +8,8 @@ from datetime import datetime
 import json.decoder
 from .utils import safe_create_cwm_folder, find_nearest_bank_path, DEFAULT_CONFIG
 from typing import Tuple 
+from .schema_validator import SCHEMAS, validate
+
 
 CWM_FOLDER = ".cwm"
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
@@ -51,18 +53,74 @@ class StorageManager:
         return GLOBAL_CWM_BANK
 
     def _load_json(self, file: Path, default):
+        raw = None
         try:
-            return json.loads(file.read_text())
-        except FileNotFoundError:
-            if file.exists():
-                click.echo(f"WARNING: {file.name} is missing. Attempting to restore from backup...")
-            return self._restore_from_backup(file, default)
-        except json.decoder.JSONDecodeError:
-            click.echo(f"ERROR: {file.name} corrupted. Restoring from backup...")
-            return self._restore_from_backup(file, default)
-        except Exception as e:
-            click.echo(f"Unexpected error loading {file.name}: {e}. Restoring...")
-            return self._restore_from_backup(file, default)
+            # 1. Attempt Load
+            raw = json.loads(file.read_text())
+        except (FileNotFoundError, json.decoder.JSONDecodeError):
+            # File missing or total garbage -> Backup or Default
+            if file.exists(): # It exists but is garbage
+                click.echo(f"⚠ {file.name} corrupted. Restoring from backup...")
+                raw = self._restore_from_backup(file, default)
+            else:
+                return validate(default, SCHEMAS.get(file.name, {}))
+        
+        # 2. Validate & HEAL
+        schema = SCHEMAS.get(file.name)
+        if schema:
+            validated = validate(raw, schema)
+            
+            # CRITICAL: If the validator changed anything, SAVE IT.
+            # We compare the JSON strings to be sure, as direct dict comparison is safe too.
+            if raw != validated:
+                click.echo(f"⚠ Detected corruption in {file.name}. Self-repairing...")
+                self._save_json(file, validated)
+            
+            return validated
+
+        return raw
+
+    def load_projects(self) -> dict:
+        data = self._load_json(self.projects_file, default={"last_id": 0, "projects": []})
+        projects = data.get("projects", [])
+        
+        # --- PHASE 2: LOGIC REPAIR (Re-indexing) ---
+        # If schema repair gave us ID 0 (default int) or duplicate IDs, fix them now.
+        
+        needs_save = False
+        existing_ids = set()
+        max_id = data.get("last_id", 0)
+        
+        # Check for collisions or bad IDs (0 is bad because of 'if not pid' checks)
+        for p in projects:
+            pid = p.get("id")
+            if pid == 0 or pid in existing_ids:
+                needs_save = True
+            existing_ids.add(pid)
+            if pid > max_id: max_id = pid
+
+        if needs_save:
+            click.echo("⚠ Re-indexing projects due to ID collision/corruption...")
+            
+            # Re-assign IDs
+            new_list = []
+            current_id = 1 # Start from 1 to avoid '0' issues
+            
+            # Sort loosely to keep order (put broken ones at end if needed)
+            # We try to keep valid IDs if possible, but for safety, a full re-index is cleaner
+            for p in projects:
+                p["id"] = current_id
+                new_list.append(p)
+                current_id += 1
+            
+            data["projects"] = new_list
+            data["last_id"] = current_id - 1
+            
+            self.save_projects(data)
+            click.echo("✔ Projects re-indexed successfully.")
+            
+        return data
+
 
     def _ensure_global_defaults(self):
         """
@@ -105,12 +163,18 @@ class StorageManager:
 
     def _save_json(self, file: Path, data):
         try:
+            # ALWAYS validate before writing
+            schema = SCHEMAS.get(file.name)
+            if schema:
+                data = validate(data, schema)
+
             tmp = file.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=2))
             tmp.replace(file)
         except Exception as e:
             click.echo(f"ERROR writing {file.name}: {e}")
             raise e
+
 
     def _restore_from_backup(self, file: Path, default):
         try:
@@ -282,13 +346,13 @@ class StorageManager:
         # Forces update to current active config (Local if present)
         self.update_config("history_file", str(path))
 
-    def load_projects(self) -> dict:
-        return self._load_json(self.projects_file, default={"last_id": 0, "projects": []})
+    
 
     def save_projects(self, data: dict):
         if not self.global_data_path.exists():
             self.global_data_path.mkdir(parents=True, exist_ok=True)
         self._save_json(self.projects_file, data)
+        self._update_backup(self.projects_file)
 
     def get_project_markers(self) -> list:
         # Uses the smart get_config merger

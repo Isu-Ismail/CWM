@@ -26,6 +26,10 @@ from .copy_cmd import copy_cmd
 from .git_cmd import git_cmd
 from .project_cmd import project_cmd # <--- NEW
 from .jump_cmd import jump_cmd
+from .ask_cmd import ask_cmd
+from .group_cmd import group_cmd
+from .run_cmd import run_cmd
+
 
 CWM_BANK = ".cwm"
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
@@ -159,6 +163,9 @@ cli.add_command(copy_cmd)
 cli.add_command(git_cmd)
 cli.add_command(project_cmd) # <--- NEW
 cli.add_command(jump_cmd)
+cli.add_command(ask_cmd)
+cli.add_command(group_cmd)
+cli.add_command(run_cmd)
 
 if __name__ == "__main__":
     cli()
