@@ -43,37 +43,29 @@ def _resolve_group_id(token, groups):
 
 def _launch_detached_gui():
     """
-    Launches the GUI in a detached process.
-    On Windows: Opens a new console window (or no window if configured in gui_app).
-    On Mac/Linux: Attempts to open in a terminal emulator.
+    Launches the GUI silently (no black window).
     """
     args = [sys.executable, "-m", "cwm.cli", "run", "_gui-internal"]
     is_windows = os.name == 'nt'
     
     try:
         if is_windows:
-            # CREATE_NEW_CONSOLE ensures it doesn't block the current terminal
-            subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            # 0x08000000 = CREATE_NO_WINDOW. 
+            # This is the magic flag that stops the black terminal from appearing.
+            subprocess.Popen(args, creationflags=0x08000000)
         else:
             if sys.platform == "darwin":
                 cmd_str = f"'{sys.executable}' -m cwm.cli run _gui-internal"
                 subprocess.Popen(["open", "-a", "Terminal", cmd_str])
             else:
-                # Linux: Try common terminal emulators
-                cmd_str = f"{sys.executable} -m cwm.cli run _gui-internal; exec bash"
-                if shutil.which("gnome-terminal"): 
-                    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", cmd_str])
-                elif shutil.which("konsole"): 
-                    subprocess.Popen(["konsole", "-e", "bash", "-c", cmd_str])
-                elif shutil.which("xterm"): 
-                    subprocess.Popen(["xterm", "-e", cmd_str])
-                else:
-                    click.echo("Error: No suitable terminal emulator found (gnome-terminal, konsole, xterm).")
-                    return
+                # Linux logic
+                subprocess.Popen(args, start_new_session=True)
         
         click.echo("Launching Dashboard...")
     except Exception as e:
         click.echo(f"Failed to launch GUI: {e}")
+
+
 
 @click.group("run")
 def run_cmd():
@@ -109,6 +101,33 @@ def run_project(target):
     success, msg = svc.start_project(pid)
     if success: click.echo(f"✔ {msg}")
     else: click.echo(f"✘ Failed: {msg}")
+
+@run_cmd.command("_watcher", hidden=True)
+def internal_watcher():
+    """Background process that monitors PIDs. REQUIRED for ServiceManager."""
+    if not _require_gui_deps(): return
+    try:
+        svc = ServiceManager()
+        svc.run_watcher_loop()
+    except KeyboardInterrupt:
+        pass
+
+@run_cmd.command("_gui-internal", hidden=True)
+def internal_gui_entry():
+    """Actual entry point for the GUI window."""
+    if not _require_gui_deps(): return
+    try:
+        # FIX: Point to the new file we just created
+        from .gui.tk_app import run_gui
+        run_gui()
+    except Exception as e:
+        print(f"GUI Crash: {e}")
+        input("Press Enter...")
+
+@run_cmd.command("gui")
+def launch_gui_detached():
+    """Public command to launch the dashboard."""
+    _launch_detached_gui()
 
 @run_cmd.command("group")
 @click.argument("target", required=False)
@@ -289,7 +308,8 @@ def internal_gui_entry():
     """Actual entry point for the GUI window."""
     if not _require_gui_deps(): return
     try:
-        from .gui_app import run_gui
+        # UPDATED: Import the Tkinter version
+        from .gui.tk_app import run_gui
         run_gui()
     except Exception as e:
         print(f"GUI Crash: {e}")
