@@ -386,19 +386,39 @@ class ChatSession:
 # ------------------------------------------------------
 def _resolve_instruction(manager):
     """
-    Priority:
+    Priority for resolving the instruction:
     1. Local 'instruction.txt' in current folder (Project Specific)
-    2. Global Config 'ai_instruction'
-    3. Hardcoded Default
+    2. Global Config 'ai_instruction':
+       a. If value is a valid file path, read content from that file.
+       b. Otherwise, use the value as the instruction string.
+    3. Hardcoded DEFAULT_AI_INSTRUCTION
     """
-    local_instr = Path.cwd() / "instruction.txt"
-    if local_instr.exists():
+    
+    local_instr_path = Path.cwd() / "instruction.txt"
+    if local_instr_path.exists():
         try:
-            return local_instr.read_text(encoding="utf-8").strip()
-        except: pass
+            return local_instr_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass 
     
     config = manager.get_config()
-    return config.get("ai_instruction") or DEFAULT_AI_INSTRUCTION
+    ai_instruction_config_value = config.get("ai_instruction")
+
+    if ai_instruction_config_value:
+        # We don't strip quotes here because the saver cleaned them
+        config_path = Path(ai_instruction_config_value)
+        
+        # If it is a valid file, read its content
+        if config_path.is_file():
+            try:
+                return config_path.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass 
+        
+        # If not a file (or read failed), return the string itself
+        return ai_instruction_config_value
+    
+    return DEFAULT_AI_INSTRUCTION
 
 def launch_chat(provider_class, model_key, single_prompt):
     ui = UI()

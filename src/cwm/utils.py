@@ -90,7 +90,6 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
         _ensure_dir(backup_path)
 
         required_files = {
-            "commands.json": {"last_command_id": 0, "commands": []},
             "saved_cmds.json": {"last_saved_id": 0, "commands": []},
             "fav_cmds.json": [],
             "history.json": {"last_sync_id": 0, "commands": []},

@@ -5,6 +5,7 @@ from pathlib import Path
 from .storage_manager import StorageManager, GLOBAL_CWM_BANK
 from .utils import get_all_history_candidates, find_nearest_bank_path, DEFAULT_CONFIG
 from .schema_validator import validate, SCHEMAS
+import re
 
 GLOBAL_CONFIG_PATH = GLOBAL_CWM_BANK / "config.json"
 
@@ -225,23 +226,32 @@ def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show
 
     if instruction:
         click.echo("--- Configure System Instruction ---")
+        
+        click.echo(
+            "Tip: Enter the instruction text directly, or provide an absolute path to a text file (e.g., C:/path/file.txt)."
+        )
+        
         user_input = click.prompt("Input")
 
-        final_val = user_input.strip()
-        path_check = Path(user_input)
+        # Clean quotes immediately so we don't save extra quotes to config
+        cleaned_input = user_input.strip().strip('"').strip("'")
+        
+        path_check = Path(cleaned_input)
 
+        # Check if it is a file, but do NOT read it yet. We only want to save the path.
         if path_check.exists() and path_check.is_file():
-            try:
-                final_val = path_check.read_text(encoding="utf-8").strip()
-                click.echo(f"Loaded from file: {path_check.name}")
-            except Exception as e:
-                click.echo(f"Error reading file: {e}")
-                return
+            click.echo(f"Valid file path detected: {path_check.name}")
+            final_val = cleaned_input
+        else:
+            # Not a file, treat input as raw instruction text
+            final_val = cleaned_input
+            
+        # Escape backslashes for JSON storage (C:\ becomes C:\\)
+        final_val = re.sub(r'\\', r'\\\\', final_val)
 
         write_global("ai_instruction", final_val)
         click.echo("Instruction updated.")
         return
-
     # =========================================================
     #                STANDARD GLOBAL SETTINGS
     # =========================================================

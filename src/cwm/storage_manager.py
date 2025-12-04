@@ -21,7 +21,6 @@ class StorageManager:
         self.backup_path = self.data_path / "backup"
         self.backup_limit = 10
 
-        self.commands_file   = self.data_path / "commands.json"
         self.saved_cmds_file = self.data_path / "saved_cmds.json"
         self.fav_file        = self.data_path / "fav_cmds.json"
         self.cached_history_file = self.data_path / "history.json"

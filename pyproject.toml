@@ -31,6 +31,7 @@ dependencies = [
     "rich",           
     "pyperclip",
     "pathspec",
+    "psutil"
     
 ]
 
@@ -42,11 +43,7 @@ ai = [
     "ollama"
 ]
 
-[project.optional-dependencies]
-gui = [
-    "flet",
-    "psutil"
-]
+
 
 [project.scripts]
 cwm = "cwm.cli:cli"

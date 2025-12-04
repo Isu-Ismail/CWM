@@ -159,39 +159,70 @@ class ServiceManager:
         proj = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
         if not proj: return False, "Project ID not found."
 
-        cmd_str = proj.get("startup_cmd")
-        if not cmd_str: return False, "No startup command."
-        root_path = Path(proj["path"]).resolve()
+        raw_cmd = proj.get("startup_cmd")
+        if not raw_cmd: return False, "No startup command."
 
-        if not is_safe_startup_cmd(cmd_str, root_path): return False, "SECURITY BLOCK: Unsafe command."
+        root_path = Path(proj["path"]).resolve()
+        
+        if not is_safe_startup_cmd(raw_cmd, root_path):
+            return False, "Unsafe startup command."
+
+        # Convert list to chained string
+        if isinstance(raw_cmd, list):
+            joiner = " && " if os.name == 'nt' else " && "
+            cmd_str = joiner.join(raw_cmd)
+        else:
+            cmd_str = str(raw_cmd)
+
+        cmd_str = cmd_str.replace("$ROOT", str(root_path))
 
         log_file = LOG_DIR / f"{project_id}.log"
         out_file = None 
+        
         try:
             out_file = open(log_file, "w", encoding="utf-8")
-            args = cmd_str if os.name == 'nt' else shlex.split(cmd_str)
+            args = cmd_str 
+
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
-            
-            kwargs = {"cwd": str(root_path), "stdout": out_file, "stderr": subprocess.STDOUT, "text": True, "env": env}
+
+            kwargs = {
+                "cwd": str(root_path),
+                "stdout": out_file,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "env": env
+            }
+
             if os.name == 'nt':
-                kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+                # FIX: 0x08000000 = CREATE_NO_WINDOW (Starts silently in background)
+                kwargs["creationflags"] = 0x08000000 
                 kwargs["shell"] = True
             else:
                 kwargs["start_new_session"] = True
-                kwargs["shell"] = True
+                kwargs["shell"] = True 
 
             proc = subprocess.Popen(args, **kwargs)
+            
             out_file.close() 
             
             new_entry = {
-                "project_id": project_id, "alias": proj["alias"], "pid": proc.pid, "viewers": [],
-                "status": "running", "start_time": time.time(), "log_path": str(log_file), "cmd": cmd_str
+                "project_id": project_id,
+                "alias": proj["alias"],
+                "pid": proc.pid,
+                "status": "running",
+                "start_time": time.time(),
+                "log_path": str(log_file),
+                "cmd": cmd_str,
+                "viewers": []
             }
             state[str_id] = validate_service_entry(new_entry)
             self._save_state(state)
+            
             self._ensure_watcher_running()
+            
             return True, f"Started (PID {proc.pid})"
+
         except Exception as e:
             if out_file: 
                 try: out_file.close() 
@@ -237,11 +268,7 @@ class ServiceManager:
         self._save_state(state)
         return True, "Stopped."
 
-    # --- MISSING METHOD ADDED HERE ---
     def remove_entry(self, project_id: int):
-        """
-        Stops service and removes from JSON.
-        """
         self.stop_project(project_id)
         state = self.get_services_status()
         str_id = str(project_id)
@@ -296,11 +323,41 @@ class ServiceManager:
         return killed_count
 
     def nuke_all(self):
-        stopped = self.stop_all()
+        """
+        Kills all tracked projects and the watcher.
+        Returns: (list_of_killed_info, watcher_message)
+        """
+        state = self._load_state()
+        killed_list = [] 
+
+        # 1. Kill Projects
+        for pid_str, info in state.items():
+            # Check if running
+            if info.get('status') == 'running':
+                pid = info.get('pid')
+                alias = info.get('alias', 'Unknown')
+                
+                if pid:
+                    try:
+                        # Kill the process tree
+                        parent = psutil.Process(pid)
+                        for child in parent.children(recursive=True):
+                            try: child.kill()
+                            except: pass
+                        parent.kill()
+                        
+                        killed_list.append(f"Project: {alias} (PID {pid})")
+                    except (psutil.NoSuchProcess, Exception):
+                        killed_list.append(f"Cleaned ghost: {alias} (PID {pid})")
+                
+                # Update state to stopped
+                info['status'] = 'stopped'
+                info['pid'] = None
+                info['viewers'] = [] # Clear viewers list too
+
+        self._save_state(state)
+
+        # 2. Kill Watcher (Reuse your existing method)
         _, w_msg = self.kill_watcher()
-        ghosts = self._kill_cwm_ghosts()
-        try: 
-            self._force_unhide(STATE_FILE)
-            STATE_FILE.write_text("{}")
-        except: pass
-        return stopped, f"{w_msg} (Cleaned {ghosts} ghosts)"
+
+        return killed_list, w_msg

@@ -3,7 +3,7 @@ import re
 import json
 import click
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime,timezone
 from .storage_manager import StorageManager
 from .utils import read_powershell_history, is_cwm_call, get_history_line_count, get_clear_history_command
 
@@ -12,7 +12,7 @@ VAR_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 VAR_ASSIGN_RE = re.compile(r"^\s*([A-Za-z0-9_-]+)\s?\=\s?(.+)$", flags=re.DOTALL)
 
 def _now_iso():
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 def _last_non_cwm_from_system_history():
     lines, _ = read_powershell_history() 
@@ -168,7 +168,7 @@ def _handle_save_history(manager: StorageManager, count: str):
         if cmd_str not in seen_in_cache:
             added_count += 1
             last_id += 1
-            cached_commands.append({ "id": last_id, "cmd": cmd_str, "timestamp": datetime.utcnow().isoformat() })
+            cached_commands.append({ "id": last_id, "cmd": cmd_str, "timestamp": _now_iso() })
             seen_in_cache.add(cmd_str) 
     if added_count == 0:
         click.echo("History is already up to date.")

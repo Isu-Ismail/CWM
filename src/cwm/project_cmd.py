@@ -7,39 +7,7 @@ from .project_utils import ProjectScanner
 
 console = Console()
 
-SAFE_PREFIXES = [
-    "python",
-    "python3",
-    "py",
-    "flutter",
-    "npm",
-    "node",
-    "bun",
-    "cargo",
-    "deno",
-    "uvicorn",
-    "gunicorn",
-    "php",
-    "dotnet",
-    "java",
-    "mvn",
-    "gradle",
-    "poetry",
-    "pipenv",
-    "venv/scripts/activate",
-    "venv/bin/activate",
-    "echo",
-    "start"
-]
 
-DANGER_KEYWORDS = [
-    "rm ", "rm -", "del ", "rd ", "rmdir",
-    "sudo", "powershell", "cmd ",
-    "curl ", "wget ",
-    "pkill", "kill ",
-    "copy ", "move ", "xcopy", "robocopy",
-    "cwm ",   # block any cwm command as startup
-]
 
 
 def _startup_to_list(value):
@@ -69,42 +37,56 @@ def _startup_collapse(values: list[str]):
     return clean
 
 
-def is_safe_startup_cmd(cmd: str, project_root: Path) -> bool:
-    """Heavily restricted validator for startup commands."""
-    cmd = cmd.strip()
-    if not cmd:
+DANGER_KEYWORDS = [
+    "rm ", "rm -", "del ", "rd ", "rmdir",
+    "format ", "fdisk", "mkfs",
+    ":(){ :|:& };:", # Fork bomb
+    "sudo rm", 
+    "cwm ",   # Prevent recursion
+]
+
+def is_safe_startup_cmd(cmd_input, project_root: Path) -> bool:
+    """
+    Validator for startup commands.
+    Accepts str OR list.
+    Blocks dangerous keywords but allows general shell usage.
+    """
+    if not cmd_input:
         return False
 
-    # 1) Length limit
-    if len(cmd) > 100:
-        return False
+    # Normalize to list for checking
+    cmds_to_check = []
+    if isinstance(cmd_input, list):
+        cmds_to_check = cmd_input
+    else:
+        cmds_to_check = [str(cmd_input)]
 
-    cmd_lower = cmd.lower()
+    for cmd in cmds_to_check:
+        cmd = cmd.strip()
+        if not cmd: continue
+        
+        cmd_lower = cmd.lower()
 
-    # 2) Block obvious shell chaining / special operators
-    forbidden_substrings = ["&&", "||", ";", "|", "<", ">", "$(", "`"]
-    if any(fs in cmd_lower for fs in forbidden_substrings):
-        return False
-
-    # 3) Block dangerous keywords, including 'cwm '
-    if any(bad in cmd_lower for bad in DANGER_KEYWORDS):
-        return False
-
-    # 4) Must start with an allowed prefix
-    if not any(cmd_lower.startswith(pref) for pref in SAFE_PREFIXES):
-        return False
-
-    # 5) Python script safety – script must be inside project_root if it exists
-    parts = cmd.split()
-    if parts[0] in ("python", "python3", "py") and len(parts) > 1:
-        script = parts[1]
-        try:
-            project_root = project_root.resolve()
-            script_path = (project_root / script).resolve()
-            if script_path.exists() and project_root not in script_path.parents:
-                return False
-        except Exception:
+        # 1) Block dangerous keywords
+        if any(bad in cmd_lower for bad in DANGER_KEYWORDS):
             return False
+
+        # 2) Python script safety (Optional: keep if you want file boundary checks)
+        # If running a script, ensure it's inside the project
+        parts = cmd.split()
+        if len(parts) > 1 and parts[0] in ("python", "python3", "py"):
+            script = parts[1]
+            # Ignore flags like -m
+            if not script.startswith("-"):
+                try:
+                    project_root = project_root.resolve()
+                    # Just check if path traversal attempts exist
+                    if ".." in script or script.startswith("/"):
+                        # Strict check: resolves to outside?
+                        script_path = (project_root / script).resolve()
+                        if project_root not in script_path.parents and script_path != project_root:
+                            return False
+                except: pass
 
     return True
 

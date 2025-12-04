@@ -140,19 +140,7 @@ SCHEMAS = {
         ],
     },
 
-    # -----------------------------
-    # commands.json
-    # -----------------------------
-    "commands.json": {
-        "last_command_id": int,
-        "commands": [
-            {
-                "id": int,
-                "cmd": str,
-                "timestamp": (str, type(None))
-            }
-        ]
-    },
+    
 
     # -----------------------------
     # saved_cmds.json
@@ -161,9 +149,16 @@ SCHEMAS = {
         "last_saved_id": int,
         "commands": [
             {
-                "id": int,
+                "id":int,
+                "type":str,
+                "var":str,
                 "cmd": str,
-                "category": (str, type(None))
+                "tags":list,
+                "fav":bool,
+                "created_at":str,
+                "updated_at":str
+
+                
             }
         ]
     },
@@ -183,7 +178,8 @@ SCHEMAS = {
         "commands": [
             {
                 "id": int,
-                "cmd": str
+                "cmd": str,
+                "timestamp":str
             }
         ]
     },

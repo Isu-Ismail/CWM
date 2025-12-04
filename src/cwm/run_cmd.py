@@ -53,6 +53,11 @@ def _launch_detached_gui():
             # 0x08000000 = CREATE_NO_WINDOW. 
             # This is the magic flag that stops the black terminal from appearing.
             subprocess.Popen(args, creationflags=0x08000000)
+            # ... (existing code getting command and path)
+
+# ADD THIS LINE:
+
+# ... (your existing subprocess.run / Popen call)
         else:
             if sys.platform == "darwin":
                 cmd_str = f"'{sys.executable}' -m cwm.cli run _gui-internal"
@@ -380,29 +385,32 @@ def view_logs(target, follow):
 def kill_all_processes():
     """
     EMERGENCY: Force kill all projects and the background watcher.
-    Use this if the system gets stuck or you want a hard reset.
     """
     if not _require_gui_deps(): return
     svc = ServiceManager()
     
     click.echo(click.style("⚠ Initiating Hard Kill Sequence...", fg="yellow"))
     
-    # Execute Nuke
-    count, w_msg = svc.nuke_all()
+    # Execute Nuke (Now returns a list, not a count)
+    killed_items, w_msg = svc.nuke_all()
     
-    # Report
-    if count > 0:
-        click.echo(f"✔ Terminated {count} active projects.")
+    # 1. Report Projects
+    if killed_items:
+        click.echo(f"✔ Terminated {len(killed_items)} active processes:")
+        for item in killed_items:
+            # Print each killed item with a bullet point
+            click.echo(click.style(f"   - {item}", fg="red"))
     else:
-        click.echo("• No active projects found.")
-        
-    if "killed" in w_msg:
-        click.echo(f"✔ {w_msg}")
+        click.echo("• No active projects found in registry.")
+
+    # 2. Report Watcher
+    if "terminated" in w_msg.lower():
+        click.echo(click.style(f"✔ {w_msg}", fg="red"))
     else:
         click.echo(f"• {w_msg}")
 
     click.echo(click.style("✔ System Cleaned.", fg="green", bold=True))
-
+    
 @run_cmd.command("launch")
 @click.argument("target", required=False)
 def launch_terminal(target):
