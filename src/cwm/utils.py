@@ -4,6 +4,8 @@ import platform
 from pathlib import Path
 import click
 from typing import Tuple
+import re
+import shutil   
 
 CWM_BANK_NAME = ".cwm"
 INSTRUCTION_FILE = "instruction.txt"  #
@@ -51,6 +53,50 @@ DEFAULT_CONFIG = {
 }
 
 FILE_ATTRIBUTE_HIDDEN = 0x02
+
+
+
+def looks_invalid_command(cmd: str) -> bool:
+    cmd = cmd.strip()
+
+    # 1. Empty or whitespace
+    if not cmd:
+        return True
+
+    # 2. Non printable chars
+    if not cmd.isascii() or any(ord(c) < 32 for c in cmd):
+        return True
+
+    # 3. Must contain at least one letter or number
+    if not re.search(r"[A-Za-z0-9]", cmd):
+        return True
+
+    # 4. Unmatched quotes
+    if cmd.count('"') % 2 != 0:
+        return True
+    if cmd.count("'") % 2 != 0:
+        return True
+
+    # 5. Starts with invalid pipe/redirect
+    if cmd.startswith("|") or cmd.startswith(">") or cmd.startswith("<") or cmd.startswith("#"):
+        return True
+    if cmd.isdigit():
+        return True
+
+    # 6. Multiple pipe misuse
+    if "|| |" in cmd or "||| " in cmd:
+        return True
+
+    # 7. Only symbols (no words)
+    if re.fullmatch(r"[\W_]+", cmd):
+        return True
+
+    # 8. Broken redirect syntax
+    if re.search(r"[><]{3,}", cmd):  # like >>>>> or <<<
+        return True
+
+    return False
+
 
 
 def _ensure_dir(path: Path):
@@ -134,6 +180,7 @@ def find_nearest_bank_path(start_path: Path) -> Path | None:
     return None
 
 # --- HISTORY HELPERS ---
+
 
 def get_all_history_candidates() -> list[Path]:
     """Returns a list of all valid history files found on the system."""
@@ -239,20 +286,69 @@ def get_history_file_path() -> Path | None:
             
     return None
 
+def tail_read_last_n_lines(path, n, chunk_size=4096):
+    """
+    Correct tail implementation that does NOT reverse characters.
+    """
+    if isinstance(path, Path):
+        path = str(path)
+
+    if not os.path.exists(path):
+        return []
+
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+
+        data = bytearray()
+        lines_found = 0
+        remaining = file_size
+
+        while remaining > 0 and lines_found <= n:
+            read_size = min(chunk_size, remaining)
+            remaining -= read_size
+            f.seek(remaining)
+
+            chunk = f.read(read_size)
+            data[:0] = chunk  # prepend chunk instead of extend
+
+            lines_found += chunk.count(b"\n")
+
+        # Now decode normally (no reverse needed)
+        text = data.decode("utf-8", errors="ignore")
+        lines = text.splitlines()
+
+        # Return the last N lines (correct order)
+        return lines[-n:]
+
+
+
 def read_powershell_history() -> Tuple[list[str], int]:
     """
-    Reads the history file ONCE and returns both content and count.
-    Returns: (list_of_lines, total_line_count)
+    Fast tail-based history reader.
+    Returns (list_of_lines, APPROX_total_lines).
+
+    It reads only the last chunk (about ~5000 lines),
+    but still returns the correct NEWEST lines.
     """
+
     path = get_history_file_path()
-    if not path:
+    if not path or not path.exists():
         return [], 0
+
+    # --- Read last ~5000 lines using tail (fast!) ---
+    lines = tail_read_last_n_lines(path, 5000)
+
+    # --- Count full file length without loading the file ---
     try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        # Return the lines (stripped) AND the raw count
-        return [ln.rstrip("\n") for ln in lines], len(lines)
-    except Exception:
-        return [], 0
+        total_count = sum(1 for _ in open(path, 'rb'))
+    except:
+        total_count = len(lines)
+
+    # Strip and return
+    cleaned = [ln.rstrip("\n") for ln in lines if ln.strip()]
+    return cleaned, total_count
+
 
 def is_cwm_call(s: str) -> bool:
     s = s.strip()

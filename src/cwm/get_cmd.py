@@ -2,42 +2,63 @@ import click
 import pyperclip
 import json
 from .storage_manager import StorageManager
-from .utils import read_powershell_history, is_cwm_call
+from .utils import get_history_file_path, tail_read_last_n_lines,is_cwm_call
+
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 # --- Helper for History Logic ---
-def _get_history_commands(manager: StorageManager, cached: bool, active: bool) -> Tuple[list, int]:
+def _get_history_commands(manager: StorageManager, cached: bool, active: bool):
     """
-    Returns: (list_of_commands_with_ids, total_file_line_count)
+    Returns (cmd_list, None)
     """
-    start_line = 0
-    
+    # cached mode unchanged
     if cached:
         click.echo("Loading from cached history...")
         hist_obj = manager.load_cached_history()
-        return hist_obj.get("commands", []), 0
+        return hist_obj.get("commands", []), None
 
-    lines, total_lines = read_powershell_history()
-
+    # ACTIVE MODE (watch session)
     if active:
         session = manager.load_watch_session()
+        
         if not session.get("isWatching"):
             click.echo("Error: No active watch session. Run 'cwm watch start' first.", err=True)
-            return [], 0
-            
-        start_line = session.get("startLine", 0)
-        if start_line >= total_lines:
-            click.echo("Watch session is active, but no new commands found.")
-            return [], total_lines
-            
-        lines = lines[start_line:]
-        click.echo(f"Showing active session: {len(lines)} new commands since line {start_line}.")
-        
-    # Construct command objects
-    cmd_objs = [{"id": i+start_line+1, "cmd": line} for i, line in enumerate(lines)]
-    
-    return cmd_objs, total_lines
+            return [], None
+
+        # read last ~5000 lines
+        path = get_history_file_path()
+        lines = tail_read_last_n_lines(path, 5000)
+
+        collected = []
+        found_start = False
+
+        # reverse scan bottom-up
+        for line in reversed(lines):
+            if "cwm watch start" in line:
+                found_start = True
+                break
+            collected.append(line)
+
+        collected.reverse()
+
+        if not found_start:
+            click.echo("Warning: Could not locate 'cwm watch start' in recent history.")
+            click.echo("Showing last 50 commands instead.")
+            collected = collected[-50:]
+
+        click.echo(f"Showing active session: {len(collected)} commands.")
+
+        return [{"cmd": line} for line in collected], None
+
+    # NORMAL HISTORY MODE
+    # Read last 5000 lines and return all
+    path = get_history_file_path()
+    lines = tail_read_last_n_lines(path, 5000)
+
+    return [{"cmd": line} for line in lines], None
+
+
 
 # --- Helper for Filtering/Displaying ---
 def _filter_and_display(commands: list, count: str, exclude: str, filter: str, list_only: bool):
@@ -101,8 +122,15 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
     for i, item in enumerate(commands_to_display):
         display_num = i + 1
         display_map[str(display_num)] = item.get("cmd", "")
-        list_id = item.get("id", display_num) 
-        click.echo(f"  [{display_num}] (ID: {list_id}) {item.get('cmd', '')}")
+        cmd_text = item.get("cmd", "")
+
+# If ID is None → history mode → do NOT show ID
+        list_id = item.get("id")
+        if list_id is None:
+            click.echo(f"  [{display_num}] {cmd_text}")
+        else:
+            click.echo(f"  [{display_num}] (ID: {list_id}) {cmd_text}")
+
 
     click.echo("---")
     
@@ -122,48 +150,7 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
     except click.exceptions.Abort:
         click.echo("\nCancelled.")
 
-# --- Helper: Archive Reader ---
-def _get_archived_commands(manager: StorageManager, arch_val: str) -> list:
-    """Reads from global archives."""
-    idx_data = manager.load_archive_index()
-    archives = idx_data.get("archives", [])
-    
-    if not archives:
-        click.echo("No archives found.")
-        return []
 
-    # --- UPDATED LOGIC: Handle LIST mode ---
-    if arch_val == "LIST":
-        click.echo("Available History Archives:")
-        for arch in archives:
-            click.echo(f"  [ID: {arch['id']}] {arch['timestamp']} ({arch['count']} cmds)")
-        return [] # Return empty list so _filter_and_display is skipped
-
-    target = None
-
-    if arch_val == "LATEST":
-        if archives:
-            target = archives[-1]
-    else:
-        try:
-            target_id = int(arch_val)
-            target = next((a for a in archives if a['id'] == target_id), None)
-        except ValueError:
-             click.echo("Error: Archive ID must be an integer.")
-             return []
-
-    if not target:
-        click.echo(f"Archive not found.")
-        return []
-        
-    path = manager.get_archive_path(target['filename'])
-    if not path.exists():
-        click.echo("Error: Archive file missing from disk.")
-        return []
-        
-    click.echo(f"Loading Archive ID {target['id']} ({target['count']} cmds)...")
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [{"id": i+1, "cmd": line} for i, line in enumerate(lines)]
 
 # --- Helper: Filter Saved (UPDATED) ---
 def _filter_and_display_saved(commands: list, count: str, exclude: str, filter: str, tag: str, skip_prompt: bool = False):
@@ -250,24 +237,17 @@ def _filter_and_display_saved(commands: list, count: str, exclude: str, filter: 
 @click.option("-ex", "exclude", help="[List/History] Exclude commands starting with this string.")
 @click.option("-f", "filter", help="[List/History] Filter for commands containing this string.")
 @click.option("--cached", "cached_flag", is_flag=True, help="[History] Get from CWM's saved history cache.")
-@click.option("--arch", "arch_flag", required=False, is_flag=False, flag_value="LIST", help="Get from Archives. Default is latest.")
 def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
-            hist_flag, active_flag, count, exclude, filter, cached_flag, arch_flag):
+            hist_flag, active_flag, count, exclude, filter, cached_flag):
     """
-    Get saved commands, live history, or archives.
+    Get saved commands, live history
     
     Default behavior for saved commands is to COPY to clipboard.
     Use -s to only show.
     """
     manager = StorageManager()
 
-    # --- MODE 1: Archives ---
-    if arch_flag:
-         commands = _get_archived_commands(manager, arch_flag)
-         if commands:
-             # Archive mode always lists and prompts (uses the shared filter/display)
-             _filter_and_display(commands, count, exclude, filter, list_only=False)
-         return
+
 
     # --- MODE 2: History ---
     if hist_flag or cached_flag or active_flag:
@@ -280,21 +260,11 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
         
         commands_list, total_lines = _get_history_commands(manager, cached_flag, active_flag)
         
-        # Check Warning (Live mode only)
-        if not cached_flag:
-            config = manager.get_config()
-            if not config.get("suppress_history_warning"):
-                if total_lines > 10000:
-                    click.echo(click.style(f"WARNING: History file is large ({total_lines} lines).", fg="yellow"))
-                    click.echo(click.style("Run 'cwm save --archive' to optimize.", fg="yellow"))
-                    click.echo("")
         
-        # History mode always lists and prompts (unless -l is used)
-        # NOTE: Variable list_mode is reused here for 'list_only'
+        
         _filter_and_display(commands_list, count, exclude, filter, list_only=list_mode)
         return
 
-    # --- MODE 3: Saved List (Explicit) ---
     if list_mode or tag_flag:
         if name_or_id or id_flag:
             click.echo("Error: -l or -t cannot be used with a specific var_name or --id.")
@@ -305,7 +275,6 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
         _filter_and_display_saved(commands, count, exclude, filter, tag_flag, skip_prompt=show_flag)
         return
 
-    # --- MODE 4: Saved Fast-Path (Single Item or Default List) ---
     data_obj = manager.load_saved_cmds()
     commands = data_obj.get("commands", [])
     command_to_get = None
@@ -321,8 +290,6 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
                 command_to_get = cmd.get("cmd")
                 break
     else:
-        # User just typed "cwm get" OR "cwm get -s" with no args -> Default to List
-        # Pass show_flag as skip_prompt here
         _filter_and_display_saved(commands, "10", None, None, None, skip_prompt=show_flag)
         return
 
@@ -330,10 +297,8 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
         click.echo(f"Error: Command '{name_or_id or id_flag}' not found in saved commands.")
         return
 
-    # --- Auto-Copy / Show Logic (For Single Item) ---
     if show_flag:
         click.echo(command_to_get)
     else:
-        # Default: Copy + Notify
         pyperclip.copy(command_to_get)
         click.echo(f"Command '{name_or_id or id_flag}' copied to clipboard.")

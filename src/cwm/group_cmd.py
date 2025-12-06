@@ -13,10 +13,8 @@ def group_cmd():
 def add_group():
     """
     Interactively create a project group with pagination.
-
-    Rules:
-      - Group must contain at least 2 projects
-      - No two groups can have identical project sets
+    
+    Now creates 'Healable' links: {"id": 1, "verify": "alias"}
     """
     manager = StorageManager()
     data = manager.load_projects()
@@ -29,17 +27,21 @@ def add_group():
     groups = data.get("groups", [])
     last_group_id = data.get("last_group_id", 0)
 
+    # Sort by ID for display
     sorted_projs = sorted(projects, key=lambda x: x["id"])
     page_size = 10
     index = 0
     selected_ids = None
 
+    # --- 1. Pagination & Selection Loop ---
     while True:
         end_index = min(index + page_size, len(sorted_projs))
         click.echo(f"\n--- Projects ({index + 1}–{end_index} of {len(sorted_projs)}) ---")
+        
         for p in sorted_projs[index:end_index]:
             grp = p.get("group")
             grp_label = f"(group: {grp})" if grp else ""
+            # Display ID, Alias, Path
             click.echo(f"[{p['id']}] {p['alias']:<20} : {p['path']} {grp_label}")
 
         user_input = click.prompt(
@@ -80,22 +82,49 @@ def add_group():
         click.echo("No projects selected.")
         return
 
-    # must have at least 2 projects
+    # Must have at least 2 projects
     if len(selected_ids) < 2:
         click.echo("A group must contain at least 2 projects.")
         return
 
-    new_set = set(selected_ids)
+    # --- 2. Build the Healable List ---
+    # We need to map IDs to Aliases to create the verify key
+    new_group_items = []
+    
+    # Create a lookup for fast access
+    proj_lookup = {p["id"]: p for p in projects}
 
-    # prevent duplicate groups (same composition)
+    for pid in selected_ids:
+        proj = proj_lookup[pid]
+        new_group_items.append({
+            "id": pid,
+            "verify": proj["alias"]  # The anchor for self-healing
+        })
+
+    # --- 3. Check for Duplicates ---
+    # We need to compare the SET of IDs to existing groups
+    new_id_set = set(selected_ids)
+
     for g in groups:
-        if set(g.get("project_ids", [])) == new_set:
+        # Extract IDs from the existing group's object list
+        # Handling both old format (list of ints) and new format (list of dicts) just in case
+        existing_items = g.get("project_list", [])
+        existing_ids = set()
+        
+        for item in existing_items:
+            if isinstance(item, dict):
+                existing_ids.add(item.get("id"))
+            else:
+                existing_ids.add(item) # fallback for old data
+
+        if existing_ids == new_id_set:
             click.echo(
                 f"Error: A group with the same project list already exists "
                 f"(id={g['id']}, alias='{g['alias']}')."
             )
             return
 
+    # --- 4. Get Alias & Save ---
     new_group_id = last_group_id + 1
     existing_aliases = {g["alias"] for g in groups}
     default_alias = f"group{new_group_id}"
@@ -115,11 +144,12 @@ def add_group():
     new_group = {
         "id": new_group_id,
         "alias": group_alias,
-        "project_ids": selected_ids,
+        "project_list": new_group_items, # Using the new structure
     }
     groups.append(new_group)
 
-    # assign group ID to selected projects
+    # Optional: Update the project's own 'group' field to point to this new group
+    # (Note: This overwrites previous group assignments for these projects)
     for p in projects:
         if p["id"] in selected_ids:
             p["group"] = new_group_id
@@ -127,6 +157,7 @@ def add_group():
     data["groups"] = groups
     data["last_group_id"] = new_group_id
     data["projects"] = projects
+    
     manager.save_projects(data)
 
     click.echo(

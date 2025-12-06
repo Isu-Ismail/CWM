@@ -7,7 +7,6 @@ from datetime import datetime,timezone
 from .storage_manager import StorageManager
 from .utils import read_powershell_history, is_cwm_call, get_history_line_count, get_clear_history_command
 
-# ... (Regex and _now_iso UNCHANGED) ...
 VAR_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 VAR_ASSIGN_RE = re.compile(r"^\s*([A-Za-z0-9_-]+)\s?\=\s?(.+)$", flags=re.DOTALL)
 
@@ -179,122 +178,6 @@ def _handle_save_history(manager: StorageManager, count: str):
     click.echo(f"Successfully saved {added_count} new commands to history cache.")
 
 # --- NEW "FILL & SPILL" ARCHIVE LOGIC ---
-def _handle_archive_creation(manager: StorageManager):
-    """
-    Smart Archives: Combines live history with the last ACTIVE archive.
-    Fills to 10k, then spills over to a new archive.
-    """
-    click.echo("Processing Smart Archive...")
-
-    # 1. Load Index & Identify Target
-    idx_data = manager.load_archive_index()
-    archives = idx_data.get("archives", [])
-    
-    target_archive = None
-    is_new_file = True
-    
-    # Look for the last archive. Is it active?
-    if archives:
-        last = archives[-1]
-        if last.get("status", "active") == "active":
-            target_archive = last
-            is_new_file = False
-            click.echo(f"Merging into Active Archive ID {last['id']}...")
-        else:
-            click.echo(f"Last archive (ID {last['id']}) is optimized. Creating new archive...")
-    
-    # 2. Load Data to Combine
-    # A. Existing Archive Data
-    existing_lines = []
-    if target_archive:
-        path = manager.get_archive_path(target_archive['filename'])
-        if path.exists():
-            existing_lines = path.read_text(encoding="utf-8").splitlines()
-
-    # B. Live History Data
-    live_lines, source_count = read_powershell_history()
-    
-    # 3. Combine & Deduplicate (Preserving Order)
-    # Base: Existing Archive -> Append: New unique commands from Live
-    
-    combined_lines = list(existing_lines) # Start with what we already archived
-    seen = set(existing_lines)
-    
-    new_added = 0
-    # Live lines come [oldest ... newest]. We iterate in order.
-    for cmd in live_lines:
-        if cmd and not is_cwm_call(cmd):
-            if cmd not in seen:
-                combined_lines.append(cmd)
-                seen.add(cmd)
-                new_added += 1
-                
-    click.echo(f"Found {new_added} new unique commands.")
-    if new_added == 0 and not is_new_file:
-        click.echo("Archive is up to date.")
-        return
-
-    # 4. Fill & Spill Logic
-    MAX_SIZE = 10000
-    
-    # We have one giant list `combined_lines`. We need to chop it up.
-    # The first chunk updates the `target_archive` (if it existed) or creates the first new one.
-    # Subsequent chunks create new archives.
-    
-    # Determine starting ID
-    if target_archive:
-        current_id = target_archive['id']
-        # Remove the old entry from metadata list so we can re-add it updated
-        archives = [a for a in archives if a['id'] != current_id]
-    else:
-        current_id = idx_data.get("last_archive_id", 0) + 1
-
-    # Slice data into 10k chunks
-    chunks = []
-    while len(combined_lines) > 0:
-        chunk = combined_lines[:MAX_SIZE]
-        combined_lines = combined_lines[MAX_SIZE:]
-        chunks.append(chunk)
-
-    # 5. Save Files & Update Metadata
-    for i, chunk_lines in enumerate(chunks):
-        this_id = current_id + i
-        
-        # Status Logic:
-        # If chunk is full (10k) -> Optimized (Locked)
-        # If chunk is partial -> Active (Open for next time)
-        status = "optimized" if len(chunk_lines) >= MAX_SIZE else "active"
-        
-        # Write file
-        path = manager.create_archive_file(chunk_lines, this_id)
-        
-        # Add metadata
-        archives.append({
-            "id": this_id,
-            "filename": path.name,
-            "timestamp": _now_iso(),
-            "count": len(chunk_lines),
-            "status": status
-        })
-        
-        # Keep track of max ID
-        if this_id > idx_data.get("last_archive_id", 0):
-            idx_data["last_archive_id"] = this_id
-            
-        click.echo(f"-> Wrote Archive {this_id}: {len(chunk_lines)} commands ({status})")
-
-    # 6. Save Index
-    idx_data["archives"] = archives
-    manager.save_archive_index(idx_data)
-    
-    # 7. User Instruction
-    click.echo("-" * 40)
-    clear_cmd = get_clear_history_command()
-    if clear_cmd:
-        click.echo(click.style("Archive complete! To clear your live history, run:", fg="yellow"))
-        click.echo(f"\n    {clear_cmd}\n")
-    else:
-        click.echo("Archive complete. You can now clear your history file.")
 
 # --- (Dispatcher is UNCHANGED) ---
 @click.command("save")
@@ -304,8 +187,6 @@ def _handle_archive_creation(manager: StorageManager):
 @click.option("-b", "save_before", is_flag=True, default=False, help="Save from history")
 @click.option("--hist", "save_history_flag", is_flag=True, default=False, help="Cache history")
 @click.option("-n", "count", default="all", help="[History] Limit count")
-@click.option("--archive", "archive_flag", is_flag=True, help="Smart Archive: Fill & Spill.")
-@click.option("--arch", "arch_alias_flag", is_flag=True, help="Alias for --archive")
 @click.argument("payload", nargs=-1)
 def save_command(edit_value, edit_varname, list_mode, save_before, save_history_flag, count, archive_flag, arch_alias_flag, payload):
     """
@@ -314,12 +195,10 @@ def save_command(edit_value, edit_varname, list_mode, save_before, save_history_
     manager = StorageManager()
     raw = " ".join(payload).strip()
     
-    do_archive = archive_flag or arch_alias_flag
-
     active_flags = [
         name for name, active in {
             "-e": edit_value, "-ev": edit_varname, "-l": list_mode,
-            "-b": save_before, "--hist": save_history_flag, "--archive": do_archive
+            "-b": save_before, "--hist": save_history_flag,
         }.items() if active
     ]
     
@@ -332,7 +211,6 @@ def save_command(edit_value, edit_varname, list_mode, save_before, save_history_
         elif list_mode: _handle_list_mode(manager, raw)
         elif save_before: _handle_save_from_history(manager, raw)
         elif save_history_flag: _handle_save_history(manager, count)
-        elif do_archive: _handle_archive_creation(manager) # <-- CALLS THE NEW LOGIC
         else: _handle_normal_save(manager, raw)
     except Exception as e:
         click.echo(f"An unexpected error occurred: {e}", err=True)

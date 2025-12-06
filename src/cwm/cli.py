@@ -1,82 +1,177 @@
-# cwm/cli.py
+# src/cwm/cli.py
 import os
+import sys
 import click
 import platform 
 from difflib import get_close_matches
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
+# Only import lightweight utilities immediately
 from .utils import (
-    has_write_permission,
     is_history_sync_enabled,
     safe_create_cwm_folder,
+    get_history_file_path ,
     is_path_literally_inside_bank,
-    get_history_file_path 
+    CWM_BANK_NAME,has_write_permission
 )
 
-from .save_cmd import save_command
-from .backup_cmd import backup_cmd
-from .get_cmd import get_cmd
-from .watch_cmd import watch_cmd
-from .bank_cmd import bank_cmd
-from .clear_cmd import clear_cmd
-from .setup_cmd import setup_cmd
-from .config_cmd import config_cmd
-from .copy_cmd import copy_cmd
-from .git_cmd import git_cmd
-from .project_cmd import project_cmd # <--- NEW
-from .jump_cmd import jump_cmd
-from .ask_cmd import ask_cmd
-from .group_cmd import group_cmd
-from .run_cmd import run_cmd
-
-
-CWM_BANK = ".cwm"
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 
 try:
     __version__ = version("cwm-cli") 
 except PackageNotFoundError:
-    __version__ = "0.1.0" 
+    __version__ = "2.0.0" 
 
-class CwmGroup(click.Group):
+# --- LAZY LOADING MAPPING ---
+COMMAND_MAP = {
+    # Workspace
+    "jump":    (".jump_cmd", "jump_cmd"),
+    "project": (".project_cmd", "project_cmd"),
+    "run":     (".run_cmd", "run_cmd"),
+    "group":   (".group_cmd", "group_cmd"),
+    
+    # Core
+    "save":    (".save_cmd", "save_command"),
+    "get":     (".get_cmd", "get_cmd"),
+    "config":  (".config_cmd", "config_cmd"),
+    "git":     (".git_cmd", "git_cmd"),
+    
+    # Utils
+    "copy":    (".copy_cmd", "copy_cmd"),
+    "watch":   (".watch_cmd", "watch_cmd"),
+    "backup":  (".backup_cmd", "backup_cmd"),
+    "bank":    (".bank_cmd", "bank_cmd"),
+    "clear":   (".clear_cmd", "clear_cmd"),
+    "setup":   (".setup_cmd", "setup_cmd"),
+    "ask":     (".ask_cmd", "ask_cmd"),
+}
+
+# Define Category Order
+CATEGORIES = {
+    "Workspace & Navigation": ["project", "jump", "group", "run"],
+    "Core & Configuration":   ["init", "hello", "config", "setup"],
+    "History & Storage":      ["save", "get", "backup", "clear", "bank"],
+    "Tools & Utilities":      ["ask", "git", "copy", "watch"],
+}
+
+class LazyGroup(click.Group):
+    def list_commands(self, ctx):
+        return sorted(list(COMMAND_MAP.keys()) + ["init", "hello"])
+
     def get_command(self, ctx, cmd_name):
-        rv = click.Group.get_command(self, ctx, cmd_name)
-        if rv is not None:
-            return rv
-        possibilities = list(self.commands.keys())
+        # 1. Handle Built-ins
+        if cmd_name == "init": return init
+        if cmd_name == "hello": return hello
+
+        # 2. Handle Lazy Loaded Commands
+        if cmd_name in COMMAND_MAP:
+            module_name, func_name = COMMAND_MAP[cmd_name]
+            try:
+                mod = __import__(f"cwm{module_name}", fromlist=[func_name])
+                return getattr(mod, func_name)
+            except ImportError as e:
+                click.echo(f"Error loading command '{cmd_name}': {e}", err=True)
+                if "flet" in str(e) or "psutil" in str(e):
+                    click.echo("Hint: Run 'pip install cwm-cli[gui]'", err=True)
+                if "google" in str(e) or "openai" in str(e):
+                    click.echo("Hint: Run 'pip install cwm-cli[ai]'", err=True)
+                return None
+            except AttributeError:
+                return None
+
+        # 3. Fuzzy Matching
+        possibilities = list(COMMAND_MAP.keys()) + ["init", "hello"]
         close = get_close_matches(cmd_name, possibilities, n=1, cutoff=0.45)
         if close:
             ctx.fail(f"Unknown command '{cmd_name}'. Did you mean '{close[0]}'?")
-        else:
-            ctx.fail(f"Unknown command '{cmd_name}'. Run 'cwm --help' for a list of commands.")
+        
+        return None
+
+    def format_commands(self, ctx, formatter):
+        """
+        Overridden method to output grouped help with COLOR.
+        """
+        commands = []
+        for subcommand in self.list_commands(ctx):
+            cmd = self.get_command(ctx, subcommand)
+            if cmd is None or cmd.hidden:
+                continue
+            commands.append((subcommand, cmd))
+
+        if not commands:
+            return
+
+        # Calculate width based on raw length to ensure alignment works with colors
+        limit = formatter.width - 6 - max(len(cmd[0]) for cmd in commands)
+
+        # Create lookup map (Command -> Category)
+        cmd_to_cat = {}
+        for cat, cmds in CATEGORIES.items():
+            for c in cmds:
+                cmd_to_cat[c] = cat
+
+        # Bucket commands
+        buckets = {cat: [] for cat in CATEGORIES}
+        buckets["Other Commands"] = []
+
+        for name, cmd in commands:
+            cat = cmd_to_cat.get(name, "Other Commands")
+            help_text = cmd.get_short_help_str(limit)
+            buckets[cat].append((name, help_text))
+
+        # Print Categories with Color
+        for cat in CATEGORIES:
+            if buckets[cat]:
+                # Heading: Yellow & Bold
+                heading = click.style(cat, fg="yellow", bold=True)
+                with formatter.section(heading):
+                    # Commands: Green
+                    styled_rows = [
+                        (click.style(name, fg="green"), help_text) 
+                        for name, help_text in buckets[cat]
+                    ]
+                    formatter.write_dl(styled_rows)
+        
+        # Print Others
+        if buckets["Other Commands"]:
+            with formatter.section(click.style("Other Commands", fg="yellow", bold=True)):
+                styled_rows = [
+                    (click.style(name, fg="green"), help_text) 
+                    for name, help_text in buckets["Other Commands"]
+                ]
+                formatter.write_dl(styled_rows)
 
 CONTEXT_SETTINGS = dict(
-    help_option_names=["-h", "--help" ,"hello"],
-    max_content_width=2000   # SUPER IMPORTANT — prevents wrapping
+    help_option_names=["-h", "--help"],
+    max_content_width=120
 )
 
+# Footer Content
+DOCS_LINK = "https://isu-ismail.github.io/cwm-docwebsite/index.html"
+FOOTER = f"Developed by ISU | Docs: {DOCS_LINK}"
+
 @click.group(
-    cls=CwmGroup,
+    cls=LazyGroup,
     context_settings=CONTEXT_SETTINGS,
-    epilog=(
-        "For full documentation and issues,visit:https://isu-ismail.github.io/cwm-docwebsite/"
-    )
+    epilog=click.style(FOOTER, fg="blue")
 )
 @click.version_option(version=__version__, prog_name="cwm")
 def cli():
     """
-    CWM: Command Watch Manager
+    CWM: Command Watch Manager (v2.0)
 
-    Track, save, and retrieve your shell commands efficiently.
+    A complete workspace and history manager for developers.
     """
     pass
+
+# --- BUILT-IN COMMANDS ---
 
 @cli.command()
 def init():
     """Initializes a .cwm folder in the current directory."""
     current_path = Path.cwd()
-    project_path = current_path / CWM_BANK
+    project_path = current_path / CWM_BANK_NAME
 
     if is_path_literally_inside_bank(current_path):
         click.echo(f"ERROR: Cannot create a .cwm bank inside another .cwm bank.")
@@ -109,63 +204,20 @@ def ensure_global_folder():
 
 ensure_global_folder()
 
-@cli.command()
+@click.command()
 def hello():
-    """Test command."""
-    click.echo(f"Hello! Welcome to CWM (v{__version__}), your command watch manager.")
+    """System diagnostics."""
+    click.echo(f"CWM v{__version__}")
+    click.echo(f"System: {platform.system()} {platform.release()}")
+    hist = get_history_file_path()
+    click.echo(f"History: {hist if hist else 'Not Detected'}")
     
-    os_name = platform.system()
-    os_release = platform.release()
-    click.echo(f"System: {os_name} {os_release}")
-
-    hist_path = get_history_file_path()
-    if hist_path:
-        name = hist_path.name
-        if "ConsoleHost_history" in name:
-            shell = "PowerShell"
-        elif ".bash_history" in name:
-            shell = "Bash"
-        elif ".zsh_history" in name:
-            shell = "Zsh"
-        else:
-            shell = "Unknown Shell"
-            
-        click.echo(f"Detected Shell: {shell}")
-        click.echo(f"History Source: {hist_path}")
-    else:
-        click.echo("History Source: None (Could not detect a supported shell history file)")
-    
-    if os.name == 'nt':
-             click.echo("")
-             click.echo(click.style("NOTE: Command Prompt (cmd.exe) is not supported for history features.", fg="yellow"))
-             click.echo("It does not write history to a file. Please use PowerShell or Git Bash.")
-
-    # --- CHECK SYNC STATUS ---
     if not is_history_sync_enabled():
-        click.echo("")
-        click.echo(click.style("NOTICE: Real-time history tracking is not enabled.", fg="yellow"))
-        click.echo(click.style("Run 'cwm setup' to configure your shell automatically.", fg="yellow"))
-        click.echo(click.style(""))
-        click.echo("")
-
-# ============================================================
-# Register All Commands
-# ============================================================
-cli.add_command(save_command)
-cli.add_command(backup_cmd)
-cli.add_command(get_cmd)
-cli.add_command(watch_cmd)
-cli.add_command(bank_cmd)
-cli.add_command(clear_cmd)
-cli.add_command(setup_cmd)
-cli.add_command(config_cmd)
-cli.add_command(copy_cmd)
-cli.add_command(git_cmd)
-cli.add_command(project_cmd) # <--- NEW
-cli.add_command(jump_cmd)
-cli.add_command(ask_cmd)
-cli.add_command(group_cmd)
-cli.add_command(run_cmd)
+        click.echo("Notice: Real-time sync not enabled (Run 'cwm setup' on Linux/Mac).")
+        
+    click.echo("")
+    click.echo(f"Documentation: {click.style(DOCS_LINK, fg='blue', underline=True)}")
+    click.echo("Developed by ISU")
 
 if __name__ == "__main__":
     cli()

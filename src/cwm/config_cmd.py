@@ -94,7 +94,7 @@ def _clear_config(path: Path):
 #   COMMAND LOGIC (unchanged except safe writers)
 # =========================================================
 
-@click.command("config")
+@click.command("config",help="command to edit configure file")
 @click.option("--shell", is_flag=True, help="Select preferred shell history file.")
 @click.option("--stop-warning", is_flag=True, help="Disable the large history warning.")
 @click.option("--global", "global_mode", is_flag=True, help="Target Global config explicitly.")

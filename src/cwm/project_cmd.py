@@ -3,11 +3,51 @@ import click
 from pathlib import Path
 from rich.console import Console
 from .storage_manager import StorageManager
-from .project_utils import ProjectScanner
+
 
 console = Console()
 
+def _prompt_project_details(target_path, projects_list, default_alias=None, pre_startup=None):
+    """
+    Shared logic to ask for Alias and Startup Commands.
+    Returns: (alias, startup_value) OR (None, None) if validation fails.
+    """
+    # 1. ALIAS
+    if not default_alias:
+        default_alias = _get_unique_alias(target_path.name, projects_list)
+        
+    alias = click.prompt("Enter Project Alias", default=default_alias)
+    alias = _get_unique_alias(alias, projects_list)
 
+    # 2. STARTUP COMMANDS
+    startup_value = None
+    
+    # Check if pre-provided (from flag) or ask interactively
+    if pre_startup:
+        raw_input = pre_startup
+    else:
+        raw_input = click.prompt(
+            "Enter startup command(s) (comma-separated) or blank",
+            default="",
+            show_default=False,
+        ).strip()
+
+    if raw_input:
+        tokens = [t.strip() for t in raw_input.split(",") if t.strip()]
+        safe_cmds = []
+        for cmd in tokens:
+            # Re-use your security check
+            if not is_safe_startup_cmd(cmd, target_path):
+                click.echo(f"⚠ Unsafe startup command blocked: {cmd}")
+                return None, None # Fail signal
+                
+            if cmd not in safe_cmds:
+                safe_cmds.append(cmd)
+        
+        # Collapse into string or list based on count
+        startup_value = _startup_collapse(safe_cmds)
+
+    return alias, startup_value
 
 
 def _startup_to_list(value):
@@ -133,44 +173,49 @@ def project_cmd():
 @project_cmd.command("scan")
 @click.option("--root", help="Specific folder to scan (defaults to User Home).")
 def scan_projects(root):
+    from .project_utils import ProjectScanner
+    import time
     """Auto-detect projects in your User Home directory."""
-    # 1. ROOT Logic: Use flag if provided, else default to Home
     start_path = Path(root).resolve() if root else Path.home()
-
+    
     manager = StorageManager()
     data = manager.load_projects()
+    
+    # Current state
     existing_paths = {p["path"] for p in data.get("projects", [])}
+    current_projects = data.get("projects", [])
+    last_id = data.get("last_id", 0)
 
     scanner = ProjectScanner(start_path)
-
-    click.echo(f"Root: {start_path}")
-    click.echo("Ignores: .cwmignore list (Downloads, Windows, etc.)\n")
-
     found_candidates = []
 
+    # --- SCANNING PHASE ---
+    start_time = time.perf_counter() # <--- 2. Start Timer
+
     with console.status("[bold cyan]Scanning folders...", spinner="dots") as status:
+        # The generator error is fixed in Part 1, so this loop will now work
         for proj_path in scanner.scan_generator():
-            status.update(
-                f"[bold cyan]Scanning... ({scanner.scanned_count} folders checked)"
-            )
+            status.update(f"[bold cyan]Scanning... ({scanner.scanned_count} checked)")
             if str(proj_path) in existing_paths:
                 continue
             found_candidates.append(proj_path)
+
+    end_time = time.perf_counter() # <--- 3. Stop Timer
+    duration = end_time - start_time # <--- 4. Calculate Duration
+
+    # --- PRINT STATS ---
+    console.print(
+        f"\n[dim]Scan Summary: Checked {scanner.scanned_count} folders in {duration:.2f} seconds.[/dim]"
+    )
 
     if not found_candidates:
         console.print("[yellow]Scan complete. No new projects found.[/yellow]")
         return
 
-    console.print(
-        f"[bold green]✔ Scan Complete! Found {len(found_candidates)} perfect candidates.[/bold green]"
-    )
+    console.print(f"[bold green]✔ Found {len(found_candidates)} candidates.[/bold green]")
 
-    current_projects = data.get("projects", [])
-    last_id = data.get("last_id", 0)
-    # ensure group metadata exists
-    last_group_id = data.get("last_group_id", 0)
-    groups = data.get("groups", [])
-
+    # --- IMPORT PHASE ---
+    # (Rest of your code remains exactly the same...)
     added_count = 0
 
     for p in found_candidates:
@@ -178,7 +223,7 @@ def scan_projects(root):
         click.echo(f"\nCandidate: [ {rel_path} ]")
 
         action = click.prompt(
-            "Add project? [y]es, [n]o (ignore forever), [s]kip",
+            "Add project? [y]es, [n]o (ignore), [s]kip",
             type=click.Choice(["y", "n", "s"]),
             default="y",
             show_default=False,
@@ -192,30 +237,30 @@ def scan_projects(root):
             continue
 
         if action == "y":
-            default_name = p.name
-            suggested = _get_unique_alias(default_name, current_projects)
-            alias = click.prompt("Alias", default=suggested)
-            alias = _get_unique_alias(alias, current_projects)
+            alias, startup_cmd = _prompt_project_details(p, current_projects)
+            
+            if alias is None: 
+                click.echo("Skipping due to validation error.")
+                continue
 
             last_id += 1
-            current_projects.append(
-                {
-                    "id": last_id,
-                    "alias": alias,
-                    "path": str(p),
-                    "hits": 0,
-                    "startup_cmd": None,  # new field
-                    "group": None,        # new field
-                }
-            )
+            
+            current_projects.append({
+                "id": last_id,
+                "alias": alias,
+                "path": str(p),
+                "hits": 0,
+                "startup_cmd": startup_cmd, 
+                "group": None
+            })
+            
             added_count += 1
             click.echo(f"-> Saved as '{alias}'")
 
+    # --- SAVE PHASE ---
     if added_count > 0:
         data["projects"] = current_projects
         data["last_id"] = last_id
-        data["last_group_id"] = last_group_id
-        data["groups"] = groups
         manager.save_projects(data)
         click.echo(f"\nSaved {added_count} new projects!")
     else:
@@ -225,27 +270,16 @@ def scan_projects(root):
 @project_cmd.command("add")
 @click.argument("path", required=False)
 @click.option("-n", "--name", help="Alias for the project.")
-@click.option(
-    "-s", "--startup",
-    help="Startup command(s). Comma-separated. Will override interactive prompt."
-)
+@click.option("-s", "--startup", help="Startup command(s).")
 def add_project(path, name, startup):
-    """
-    Manually add a project folder.
-    Supports: cwm project add .
-    Now supports: -s 'cmd1, cmd2'
-    """
+    """Manually add a project folder."""
     manager = StorageManager()
 
-    # path
+    # 1. Path Resolution
     if not path:
         path = click.prompt("Enter Project Path").strip()
 
-    if path == ".":
-        target = Path.cwd().resolve()
-    else:
-        path = path.strip().strip('"').strip("'")
-        target = Path(path).resolve()
+    target = Path.cwd().resolve() if path == "." else Path(path).resolve()
 
     if not target.exists() or not target.is_dir():
         click.echo(f"Error: Invalid directory '{path}'.")
@@ -254,66 +288,36 @@ def add_project(path, name, startup):
     data = manager.load_projects()
     projects = data.get("projects", [])
 
-    # already exists?
     if any(p["path"] == str(target) for p in projects):
         click.echo("This path is already saved.")
         return
 
-    last_id = data.get("last_id", 0)
-
-    # alias
-    default_alias = _get_unique_alias(target.name, projects)
-    alias = name or click.prompt("Enter Project Alias", default=default_alias)
-    alias = _get_unique_alias(alias, projects)
-
-    # startup commands
-    startup_value = None
-
-    if startup:
-        # user provided -s option
-        tokens = [t.strip() for t in startup.split(",") if t.strip()]
-        safe_cmds = []
-        for cmd in tokens:
-            if not is_safe_startup_cmd(cmd, target):
-                click.echo(f"Unsafe startup command blocked: {cmd}")
-                return
-            if cmd not in safe_cmds:
-                safe_cmds.append(cmd)
-        startup_value = _startup_collapse(safe_cmds)
-
-    else:
-        # interactive prompt
-        startup_raw = click.prompt(
-            "Enter startup command(s) (comma-separated) or blank",
-            default="",
-            show_default=False,
-        ).strip()
-
-        if startup_raw:
-            tokens = [t.strip() for t in startup_raw.split(",") if t.strip()]
-            safe_cmds = []
-            for cmd in tokens:
-                if not is_safe_startup_cmd(cmd, target):
-                    click.echo(f"Unsafe startup command blocked: {cmd}")
-                    return
-                if cmd not in safe_cmds:
-                    safe_cmds.append(cmd)
-            startup_value = _startup_collapse(safe_cmds)
-
-    new_id = last_id + 1
-
-    projects.append(
-        {
-            "id": new_id,
-            "alias": alias,
-            "path": str(target),
-            "hits": 0,
-            "startup_cmd": startup_value,
-        }
+    # --- CALL SHARED HELPER ---
+    # We pass 'name' and 'startup' if the user provided flags
+    alias, startup_cmd = _prompt_project_details(
+        target, 
+        projects, 
+        default_alias=name, 
+        pre_startup=startup
     )
 
+    if alias is None:
+        return # Failed validation
+
+    # Save
+    last_id = data.get("last_id", 0) + 1
+    
+    projects.append({
+        "id": last_id,
+        "alias": alias,
+        "path": str(target),
+        "hits": 0,
+        "startup_cmd": startup_cmd,
+        "group": None
+    })
+
     data["projects"] = projects
-    data["last_id"] = new_id
+    data["last_id"] = last_id
     manager.save_projects(data)
 
     click.echo(f"Added project '{alias}' → {target}")

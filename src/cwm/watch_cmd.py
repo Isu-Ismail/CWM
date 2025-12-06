@@ -1,104 +1,123 @@
-# cwm/watch_cmd.py
 import click
-from .storage_manager import StorageManager, GLOBAL_CWM_BANK
-from .utils import read_powershell_history, is_cwm_call
-from datetime import datetime
+from pathlib import Path
+from rich.console import Console  # <--- IMPORT RICH
+from .storage_manager import StorageManager
+from .shell_hook import (
+    detect_shell,
+    get_shell_extension,
+    generate_hook_script,
+    install_hook,
+    remove_hook,
+)
+
+# Initialize Rich Console
+console = Console()
 
 @click.group("watch")
 def watch_cmd():
-    """Start or stop a command watch session."""
+    """Start or stop per-project command monitoring."""
     pass
 
+# =====================================================================================
+# WATCH START
+# =====================================================================================
 @watch_cmd.command("start")
 def start():
-    """
-    Start a new watch session.
-    This marks the current history line as the starting point.
-    """
+    """Injects a hook into your shell to record commands locally."""
     manager = StorageManager()
     
-    if manager.get_bank_path() == GLOBAL_CWM_BANK:
-
-        click.echo("Error: 'cwm watch' can only be run inside a CWM bank (run 'cwm init').", err=True)
+    # 1. Detect Shell
+    shell_type = detect_shell()
+    # Use console.print to render colors
+    console.print(f"Detected shell: [cyan]{shell_type}[/cyan]")
+    
+    # 2. Get Project Paths
+    hist_file = manager.get_project_history_path()
+    project_root = hist_file.parent 
+    
+    # 3. Determine Hook File Name
+    ext = get_shell_extension(shell_type)
+    hook_file_path = project_root / f"cwm_hook{ext}"
+    
+    # 4. Generate Hook Content
+    try:
+        hook_content = generate_hook_script(shell_type, hist_file)
+    except Exception as e:
+        console.print(f"[red]Error generating hook:[/red] {e}")
         return
+
+    # 5. Write Hook File locally
+    project_root.mkdir(parents=True, exist_ok=True)
+    hook_file_path.write_text(hook_content, encoding="utf-8")
+    
+    # 6. Install into System Profile
+    try:
+        profile_path = install_hook(shell_type, hook_file_path)
         
-    lines, line_count = read_powershell_history()
-    
-    session = manager.load_watch_session()
-    
-    if session.get("isWatching"):
-        click.echo("Watch session already active. Restarting from current line...")
-    else:
-        click.echo("Watch session started.")
+        # 7. Save Session State
+        manager.save_watch_session({
+            "isWatching": True,
+            "shell": shell_type,
+            "hook_file": str(hook_file_path),
+            "started_at": manager._now()
+        })
+        
+        console.print(f"[bold green]✔ Watch session started![/bold green]")
+        console.print(f"  Hook saved to: [dim]{hook_file_path.name}[/dim]")
+        console.print(f"  Profile updated: [dim]{profile_path}[/dim]")
+        console.print("[yellow]⚠ Please restart your terminal (or run '. $PROFILE') to begin recording.[/yellow]")
+        
+    except Exception as e:
+        console.print(f"[red]Failed to install hook:[/red] {e}")
 
-    session["isWatching"] = True
-    session["startLine"] = line_count
-    manager.save_watch_session(session)
-    click.echo(f"Watching for new commands after line {line_count}.")
-
+# =====================================================================================
+# WATCH STOP
+# =====================================================================================
 @watch_cmd.command("stop")
-@click.option("--save", "save_flag", is_flag=True, help="Save the captured session to CWM history.")
-@click.option("-ex", "exclude", help="[Save] Exclude commands starting with this string.")
-@click.option("-f", "filter", help="[Save] Filter for commands containing this string.")
-def stop(save_flag, exclude, filter):
-    """
-    Stop the current watch session.
-    """
+def stop():
+    """Stops the watch session and removes hooks."""
     manager = StorageManager()
     session = manager.load_watch_session()
-    
+
     if not session.get("isWatching"):
-        click.echo("Watch session is already stopped.")
+        console.print("[yellow]No active watch session.[/yellow]")
         return
 
-    start_line = session.get("startLine", 0)
+    shell_type = session.get("shell")
+    hook_file_str = session.get("hook_file")
+
+    console.print(f"Stopping watch for shell: [cyan]{shell_type}[/cyan]")
+
+    # 1. Remove from Profile
+    remove_hook(shell_type)
+    console.print("✔ Shell hook removed from profile.")
+
+    # 2. Delete the temporary hook file
+    if hook_file_str:
+        hook_path = Path(hook_file_str)
+        if hook_path.exists():
+            hook_path.unlink()
+            console.print(f"✔ Deleted local hook file: [dim]{hook_path.name}[/dim]")
+
+    # 3. Reset Session
+    manager.save_watch_session({"isWatching": False})
     
-    if save_flag:
-        click.echo("Saving captured session to history...")
-        lines, _ = read_powershell_history()
-        
-        commands_to_save = lines[start_line:]
-        
-        if exclude:
-            commands_to_save = [cmd for cmd in commands_to_save if not cmd.startswith(exclude)]
-        if filter:
-            commands_to_save = [cmd for cmd in commands_to_save if filter in cmd]
-            
-        hist_obj = manager.load_cached_history()
-        cached_commands = hist_obj.get("commands", [])
-        last_id = hist_obj.get("last_sync_id", 0)
-        seen_in_cache = set(item.get("cmd") for item in cached_commands)
-        
-        added_count = 0
-        for cmd_str in commands_to_save:
-            if cmd_str and cmd_str not in seen_in_cache and not is_cwm_call(cmd_str):
-                added_count += 1
-                last_id += 1
-                cached_commands.append({
-                    "id": last_id,
-                    "cmd": cmd_str,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-                seen_in_cache.add(cmd_str)
-        
-        hist_obj["commands"] = cached_commands
-        hist_obj["last_sync_id"] = last_id
-        manager.save_cached_history(hist_obj)
-        click.echo(f"Saved {added_count} new commands.")
+    console.print("[bold green]Watch session stopped.[/bold green]")
+    console.print("Please restart your terminal to clear the session completely.")
 
-    session["isWatching"] = False
-    session["startLine"] = 0
-    manager.save_watch_session(session)
-    click.echo("Watch session stopped.")
-
+# =====================================================================================
+# WATCH STATUS
+# =====================================================================================
 @watch_cmd.command("status")
 def status():
-    """Checks if a watch session is active."""
+    """Display current watch session status."""
     manager = StorageManager()
     session = manager.load_watch_session()
-    
+
     if session.get("isWatching"):
-        start_line = session.get("startLine", 0)
-        click.echo(f"Watch session is ACTIVE (tracking since line {start_line}).")
+        console.print("[bold green]Watch session ACTIVE[/bold green]")
+        console.print(f"Shell: [cyan]{session.get('shell')}[/cyan]")
+        console.print(f"Hook File: [dim]{session.get('hook_file')}[/dim]")
+        console.print(f"Started at: {session.get('started_at')}")
     else:
-        click.echo("Watch session is INACTIVE.")
+        console.print("[dim]Watch session INACTIVE[/dim]")
