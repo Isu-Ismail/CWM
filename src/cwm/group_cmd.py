@@ -82,10 +82,8 @@ def add_group():
         click.echo("No projects selected.")
         return
 
-    # Must have at least 2 projects
-    if len(selected_ids) < 2:
-        click.echo("A group must contain at least 2 projects.")
-        return
+    
+    
 
     # --- 2. Build the Healable List ---
     # We need to map IDs to Aliases to create the verify key
@@ -185,14 +183,29 @@ def list_groups():
     proj_by_id = {p["id"]: p for p in projects}
 
     for g in sorted(groups, key=lambda x: x["id"]):
-        pids = g.get("project_ids", [])
-        count = len(pids)
+        # 1. FIX KEY: Use "project_list" (singular)
+        group_items = g.get("project_list", []) 
+        
+        # 2. Extract IDs from the list of dictionaries
+        project_ids = []
+        for item in group_items:
+            # Handle both new (dict) and old (int) formats for robustness
+            if isinstance(item, dict):
+                project_ids.append(item.get("id"))
+            else:
+                project_ids.append(item) # fallback for old int list
+        
+        # Now count the actual unique project IDs
+        count = len(project_ids)
 
         aliases = []
-        for pid in pids[:3]:
-            p = proj_by_id.get(pid)
-            if p:
-                aliases.append(p["alias"])
+        # 3. Use the extracted integer IDs for lookup
+        for pid in project_ids[:3]:
+            # Ensure pid is an integer before lookup
+            if isinstance(pid, int):
+                p = proj_by_id.get(pid)
+                if p:
+                    aliases.append(p["alias"])
 
         if aliases:
             preview = ", ".join(aliases)

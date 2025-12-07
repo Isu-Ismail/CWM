@@ -188,7 +188,7 @@ def _handle_save_history(manager: StorageManager, count: str):
 @click.option("--hist", "save_history_flag", is_flag=True, default=False, help="Cache history")
 @click.option("-n", "count", default="all", help="[History] Limit count")
 @click.argument("payload", nargs=-1)
-def save_command(edit_value, edit_varname, list_mode, save_before, save_history_flag, count, archive_flag, arch_alias_flag, payload):
+def save_command(edit_value, edit_varname, list_mode, save_before, save_history_flag, count,  payload):
     """
     Save commands or manage history archives.
     """

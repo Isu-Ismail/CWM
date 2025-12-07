@@ -50,14 +50,8 @@ def _launch_detached_gui():
     
     try:
         if is_windows:
-            # 0x08000000 = CREATE_NO_WINDOW. 
-            # This is the magic flag that stops the black terminal from appearing.
             subprocess.Popen(args, creationflags=0x08000000)
-            # ... (existing code getting command and path)
 
-# ADD THIS LINE:
-
-# ... (your existing subprocess.run / Popen call)
         else:
             if sys.platform == "darwin":
                 cmd_str = f"'{sys.executable}' -m cwm.cli run _gui-internal"
@@ -77,7 +71,7 @@ def run_cmd():
     """Orchestrate background processes."""
     pass
 
-@run_cmd.command("project")
+@run_cmd.command("project",help="Run a single project in background")
 @click.argument("target", required=False)
 def run_project(target):
     if not _require_gui_deps(): return
@@ -107,34 +101,13 @@ def run_project(target):
     if success: click.echo(f"✔ {msg}")
     else: click.echo(f"✘ Failed: {msg}")
 
-@run_cmd.command("_watcher", hidden=True)
-def internal_watcher():
-    """Background process that monitors PIDs. REQUIRED for ServiceManager."""
-    if not _require_gui_deps(): return
-    try:
-        svc = ServiceManager()
-        svc.run_watcher_loop()
-    except KeyboardInterrupt:
-        pass
-
-@run_cmd.command("_gui-internal", hidden=True)
-def internal_gui_entry():
-    """Actual entry point for the GUI window."""
-    if not _require_gui_deps(): return
-    try:
-        # FIX: Point to the new file we just created
-        from .gui.tk_app import run_gui
-        run_gui()
-    except Exception as e:
-        print(f"GUI Crash: {e}")
-        input("Press Enter...")
 
 @run_cmd.command("gui")
 def launch_gui_detached():
     """Public command to launch the dashboard."""
     _launch_detached_gui()
 
-@run_cmd.command("group")
+@run_cmd.command("group",help="Run group of projects")
 @click.argument("target", required=False)
 def run_group(target):
     if not _require_gui_deps(): return
@@ -150,7 +123,8 @@ def run_group(target):
     if not target:
         click.echo("--- Available Groups ---")
         for g in sorted(groups, key=lambda x: x["id"]):
-            count = len(g.get("project_ids", []))
+            # Use the correct key: "project_list"
+            count = len(g.get("project_list", [])) 
             click.echo(f"[{g['id']}] {g['alias']:<20} ({count} projects)")
         
         target = click.prompt("Select Group ID/Alias", default="", show_default=False)
@@ -176,7 +150,7 @@ def run_group(target):
         icon = "✔" if success else "✘"
         click.echo(f"  {icon} {p_alias:<15}: {msg}")
 
-@run_cmd.command("stop")
+@run_cmd.command("stop",help="stop the bg process but state is maintained")
 @click.argument("target", required=False)
 @click.option("--all", is_flag=True, help="Stop ALL running services.")
 def stop_service(target, all):
@@ -214,7 +188,7 @@ def stop_service(target, all):
     if success: click.echo(f"✔ {msg}")
     else: click.echo(f"✘ {msg}")
 
-@run_cmd.command("remove")
+@run_cmd.command("remove",help="remove the project from the status tracker")
 @click.argument("target", required=False) 
 def remove_service(target):
     """
@@ -260,7 +234,7 @@ def remove_service(target):
         else:
             click.echo(f"Failed to remove '{project_alias}': {msg}")
 
-@run_cmd.command("list")
+@run_cmd.command("list",help="list the running processes")
 def list_running():
     if not _require_gui_deps(): return
     svc = ServiceManager()
@@ -322,7 +296,7 @@ def internal_gui_entry():
 
 @run_cmd.command("gui")
 def launch_gui_detached():
-    """Public command to launch the dashboard."""
+    """command to launch the orchestrator dashboard."""
     _launch_detached_gui()
 
 @run_cmd.command("logs")
@@ -461,7 +435,7 @@ def launch_terminal(target):
                  proc = subprocess.Popen(["open", "-a", "Terminal", cmd_str])
             elif shutil.which("gnome-terminal"):
                 proc = subprocess.Popen(["gnome-terminal", "--", "bash", "-c", f"{cmd_str}; exec bash"])
-            # ... (other linux terminals) ...
+        
 
         # 4. CRITICAL: Register the Viewer PID
         if proc and proc.pid:

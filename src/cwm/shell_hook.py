@@ -3,6 +3,7 @@ import re
 import subprocess
 import platform
 from pathlib import Path
+import textwrap
 
 HOOK_START = "# >>> CWM PROJECT HOOK START >>>"
 HOOK_END   = "# <<< CWM PROJECT HOOK END <<<"
@@ -85,26 +86,75 @@ def get_profile_path(shell_type: str) -> Path | None:
 # 4. HOOK GENERATORS (CLEAN - NO TIMESTAMPS)
 # =====================================================================================
 def generate_powershell_hook(project_history: Path) -> str:
-    hist_path = str(project_history.resolve())
+    """
+    Generates the optimized PowerShell profile script for history deduplication.
     
-    return f"""
-# --- CWM Hook (No Timestamps) ---
-$global:CWM_Last = ""
+    The script uses a HashTable for O(1) history lookups after initial load.
+    """
+    # Resolve and format the path for PowerShell (using the provided Path object)
+    hist_path = project_history.resolve().as_posix()
+    
+    # PowerShell uses backslashes, so we convert the POSIX path to a Windows-style path
+    # (assuming the input path is meant for a Windows environment where this script runs)
+    ps_path = str(project_history.resolve()).replace("/", "\\")
 
-function global:prompt {{
-    $historyItem = Get-History -Count 1
-    if ($historyItem) {{
-        $last = $historyItem.CommandLine
-        # Only save if different from last command to avoid duplicates
-        if ($last -and ($last -ne $global:CWM_Last)) {{
-            $global:CWM_Last = $last
-            # Append raw command only
-            Add-Content -LiteralPath "{hist_path}" -Value $last -Encoding utf8
+    script_template = textwrap.dedent(f"""\
+        # --- CWM Hook (Optimized Deduplication) ---
+        
+        # Global variable to track the last command for consecutive check
+        $global:CWM_Last = ""
+        
+        # Global HashTable to store all history keys for O(1) lookups
+        $global:CWM_HistoryKeys = @{{}}
+        
+        # Path to the history file (Injected Python variable: {ps_path})
+        $global:histPath = "{ps_path}"
+        
+        # 1. Initialization Function: Load history file into the HashTable once
+        function global:Initialize-HistoryCache {{
+            Write-Verbose "Initializing CWM History Cache..."
+            # Read file content and suppress errors if file is missing
+            $fileContent = Get-Content -LiteralPath $global:histPath -ErrorAction SilentlyContinue
+        
+            if ($fileContent) {{
+                # Loop through file content and add each line as a key to the HashTable
+                foreach ($line in $fileContent) {{
+                    # Use the command as the key; value doesn't matter (e.g., $true)
+                    $global:CWM_HistoryKeys[$line] = $true
+                }}
+            }}
+            Write-Verbose "History Cache loaded with $($global:CWM_HistoryKeys.Count) unique commands."
         }}
-    }}
-    "PS $((Get-Location).Path)> "
-}}
-"""
+        
+        # Call the initialization function once when the profile loads
+        global:Initialize-HistoryCache
+        
+        # 2. Optimized Prompt Function
+        function global:prompt {{
+            $historyItem = Get-History -Count 1
+            if ($historyItem) {{
+                $last = $historyItem.CommandLine
+                
+                # 1. Consecutive Check: Ignore if same as immediate previous command
+                if ($last -and ($last -ne $global:CWM_Last)) {{
+                    $global:CWM_Last = $last
+                    
+                    # 2. Optimized File-Wide Deduplication Check:
+                    # Check if the command (key) exists in the HashTable (O(1) lookup)
+                    if (-not $global:CWM_HistoryKeys.ContainsKey($last)) {{
+                        
+                        # Command is new! Add to the file AND update the cache
+                        Add-Content -LiteralPath $global:histPath -Value $last -Encoding utf8
+                        
+                        # Add the new command to the cache immediately
+                        $global:CWM_HistoryKeys[$last] = $true
+                    }}
+                }}
+            }}
+            "PS $((Get-Location).Path)> "
+        }}
+    """)
+    return script_template.rstrip()
 
 def generate_bash_hook(project_history: Path) -> str:
     hist_path = project_history.resolve().as_posix()

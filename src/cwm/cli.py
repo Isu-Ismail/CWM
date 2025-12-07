@@ -1,13 +1,10 @@
 # src/cwm/cli.py
-import os
-import sys
 import click
 import platform 
 from difflib import get_close_matches
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
-# Only import lightweight utilities immediately
 from .utils import (
     is_history_sync_enabled,
     safe_create_cwm_folder,
@@ -40,7 +37,6 @@ COMMAND_MAP = {
     # Utils
     "copy":    (".copy_cmd", "copy_cmd"),
     "watch":   (".watch_cmd", "watch_cmd"),
-    "backup":  (".backup_cmd", "backup_cmd"),
     "bank":    (".bank_cmd", "bank_cmd"),
     "clear":   (".clear_cmd", "clear_cmd"),
     "setup":   (".setup_cmd", "setup_cmd"),
@@ -51,7 +47,7 @@ COMMAND_MAP = {
 CATEGORIES = {
     "Workspace & Navigation": ["project", "jump", "group", "run"],
     "Core & Configuration":   ["init", "hello", "config", "setup"],
-    "History & Storage":      ["save", "get", "backup", "clear", "bank"],
+    "History & Storage":      ["save", "get", "clear", "bank"],
     "Tools & Utilities":      ["ask", "git", "copy", "watch"],
 }
 

@@ -144,11 +144,12 @@ class StorageManager:
 
     def _reindex_projects(self, data: dict) -> dict:
         """
-        Fixes projects.json INTELLIGENTLY:
-        - Re-indexes Projects (1..N) and creates a map of {Old_ID -> New_ID}.
-        - Re-indexes Groups (1..N) and creates a map of {Old_Group_ID -> New_Group_ID}.
-        - UPDATES the relationships so Groups still point to the correct Projects
-          and Projects still point to the correct Groups.
+        Fixes projects.json:
+        - Re-indexes Projects (1..N) and maps {Old -> New}.
+        - Re-indexes Groups (1..N) and maps {Old -> New}.
+        - UPDATES the 'group' field in each Project.
+        - UPDATES the 'project_list' in each Group (Updating IDs, Removing dead links).
+        - REMOVES the legacy 'project_ids' field entirely.
         """
         projects = data.get("projects", [])
         groups = data.get("groups", [])
@@ -162,6 +163,8 @@ class StorageManager:
             new_id = index
             
             proj["id"] = new_id
+            
+            # Only map if the old ID was valid (not None)
             if old_id is not None:
                 proj_map[old_id] = new_id
                 
@@ -185,24 +188,40 @@ class StorageManager:
             
         data["last_group_id"] = last_group_id
 
-        # --- PHASE 3: Fix Relationships (The "Intelligent" Part) ---
+        # --- PHASE 3: Fix Relationships & Cleanup ---
         
-        # A. Fix "project_ids" inside Groups (using proj_map)
+        # A. Fix Groups (Update IDs and Remove Dead Projects)
         for grp in groups:
-            old_proj_ids = grp.get("project_ids", [])
-            new_proj_ids = []
-            for pid in old_proj_ids:
-                if pid in proj_map:
-                    new_proj_ids.append(proj_map[pid])
-            grp["project_ids"] = new_proj_ids
+            # 1. Kill the legacy 'project_ids' key (fixes validation loop)
+            if "project_ids" in grp:
+                del grp["project_ids"]
             
+            # 2. Rebuild 'project_list' with valid projects only
+            old_list = grp.get("project_list", [])
+            new_list = []
+            
+            for item in old_list:
+                old_pid = item.get("id")
+                
+                # CHECK: Does this project still exist?
+                if old_pid in proj_map:
+                    # YES: Update ID to the new re-indexed number
+                    item["id"] = proj_map[old_pid]
+                    new_list.append(item)
+                # NO: The project was deleted or not found in 'projects'.
+                # We skip appending it, effectively removing it from the group.
+            
+            grp["project_list"] = new_list
+                    
         # B. Fix "group" inside Projects (using group_map)
         for proj in projects:
             old_grp_id = proj.get("group")
+            
             if old_grp_id in group_map:
+                # Update to new Group ID
                 proj["group"] = group_map[old_grp_id]
-            elif old_grp_id is not None:
-                # If the group it pointed to no longer exists, set to None
+            else:
+                # Group no longer exists -> orphan the project
                 proj["group"] = None
 
         return data
@@ -226,9 +245,13 @@ class StorageManager:
         raw = None
         try:
             # 1. Attempt Load
-            raw = json.loads(file.read_text())
+            if file.exists():
+                raw = json.loads(file.read_text(encoding="utf-8"))
+            else:
+                # File doesn't exist, validate default and return
+                return validate(default, SCHEMAS.get(file.name, {}))
+                
         except (FileNotFoundError, json.decoder.JSONDecodeError):
-            # File missing or total garbage -> Backup or Default
             if file.exists(): 
                 click.echo(f"⚠ {file.name} corrupted. Restoring from backup...")
                 raw = self._restore_from_backup(file, default)
@@ -238,24 +261,26 @@ class StorageManager:
         # 2. Validate & HEAL
         schema = SCHEMAS.get(file.name)
         if schema:
-            validated = validate(raw, schema)
+            # A. Fix Types (e.g. "jxk" -> 0)
+            is_partial = (file.name == "config.json")
+            validated = validate(raw, schema,partial=is_partial)
 
-            # 3. RE-INDEX IDs (Ensure numbers are 1, 2, 3... and meta matches)
-            # We pass the validated data to be re-ordered/fixed
+            # B. Fix IDs (e.g. 0 -> 14)
             final_data = self._enforce_sequential_ids(file.name, validated)
             
+            # C. Special Logic for Projects (Fix Groups)
             if file.name == "projects.json":
                 cleaned_data, changed = self._heal_groups(final_data)
                 if changed:
                     click.echo("⚠ Self-healing: Corrected Group Links due to ID mismatch.")
-                    self._save_json(file, cleaned_data)
+                    # We update final_data with the group-healed version
+                    final_data = cleaned_data
 
-                return cleaned_data
-            
-            # CRITICAL: If the validator OR the re-indexer changed anything, SAVE IT.
-            # We compare raw (original) vs final_data (validated + re-indexed)
+            # 3. CRITICAL SAVE CHECK
+            # We compare raw (original "jxk") vs final_data (fixed 14).
+            # If they are different, we SAVE the file immediately.
             if raw != final_data:
-                click.echo(f"⚠ Detected corruption or ID mismatch in {file.name}. Self-repairing...")
+                click.echo(f"⚠ Detected corruption/schema mismatch in {file.name}. Saving repairs...")
                 self._save_json(file, final_data)
             
             return final_data
@@ -348,46 +373,61 @@ class StorageManager:
 
     def _restore_from_backup(self, file: Path, default):
         """
-        Restores from {filename}.bak if it exists and is valid.
+        Restores from {filename}.bak in the SAME DIRECTORY.
         """
-        bak_path = self.backup_path / f"{file.name}.bak"
+        # FIX: Look in the same folder as the corrupted file
+        bak_path = file.parent / f"{file.name}.bak"
 
         if bak_path.exists():
             try:
                 # 1. Read backup
-                content = bak_path.read_text()
-                # 2. Verify it's valid JSON before restoring
-                restored_data = json.loads(content)
-                # 3. Restore
-                file.write_text(content)
-                click.echo(f"✔ Restored {file.name} from backup successfully.")
-                return restored_data
+                content = bak_path.read_text(encoding="utf-8")
+                
+                # 2. Verify JSON (if it's a JSON file)
+                if file.suffix == ".json":
+                    restored_data = json.loads(content)
+                    # If valid, restore to original file
+                    file.write_text(content, encoding="utf-8")
+                    click.echo(f"✔ Restored {file.name} from backup successfully.")
+                    return restored_data
+                else:
+                    # For text files (history), just restore
+                    file.write_text(content, encoding="utf-8")
+                    click.echo(f"✔ Restored {file.name} from backup successfully.")
+                    return content # Or whatever return type needed
+                    
             except Exception as e:
-                click.echo(f"⚠ Backup {bak_path.name} is also corrupted or unreadable: {e}")
+                click.echo(f"⚠ Backup {bak_path.name} is also corrupted: {e}")
         
-        click.echo(f"⚠ No valid backups found for {file.name}. Rebuilding from default.")
-        file.write_text(json.dumps(default, indent=2))
+        click.echo(f"⚠ No valid backups found for {file.name}. Rebuilding default.")
+        
+        # If default is a dict/list, dump as JSON. If string, write directly.
+        if isinstance(default, (dict, list)):
+            file.write_text(json.dumps(default, indent=4), encoding="utf-8")
+        else:
+            file.write_text(str(default), encoding="utf-8")
+            
         return default
 
     def _update_backup(self, file: Path):
         """
-        Creates a single backup copy: filename.json -> filename.json.bak
-        Overwrites existing backup.
+        Creates a single backup copy in the SAME DIRECTORY: 
+        filename.json -> filename.json.bak
         """
         try:
-            if not self.backup_path.exists():
-                self.backup_path.mkdir(parents=True, exist_ok=True)
-
+            
+            backup_dir = file.parent  
+            
             bak_name = f"{file.name}.bak"
-            new_bak_path = self.backup_path / bak_name
+            new_bak_path = backup_dir / bak_name
             
             # copy2 overwrites if exists
             shutil.copy2(file, new_bak_path)
 
         except Exception as e:
-            click.echo(f"WARNING: Could not update backup for {file.name}: {e}")
+            # Use err=True so it prints to stderr (doesn't break pipes)
+            click.echo(f"WARNING: Could not update backup for {file.name}: {e}", err=True)
 
-    # --- LOADERS ---
     def load_saved_cmds(self) -> dict:
         return self._load_json(self.saved_cmds_file, default={"last_saved_id": 0, "commands": []})
 
@@ -400,9 +440,7 @@ class StorageManager:
 
     def save_cached_history(self, data: dict):
         self._save_json(self.cached_history_file, data)
-        # Typically history updates frequently, optional to backup every time, 
-        # but safe to do so if performance isn't an issue.
-        # self._update_backup(self.cached_history_file) 
+       
 
     def load_watch_session(self) -> dict:
         return self._load_json(self.watch_session_file, default={"isWatching": False, "startLine": 0})

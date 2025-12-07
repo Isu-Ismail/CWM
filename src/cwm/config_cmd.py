@@ -96,7 +96,6 @@ def _clear_config(path: Path):
 
 @click.command("config",help="command to edit configure file")
 @click.option("--shell", is_flag=True, help="Select preferred shell history file.")
-@click.option("--stop-warning", is_flag=True, help="Disable the large history warning.")
 @click.option("--global", "global_mode", is_flag=True, help="Target Global config explicitly.")
 @click.option("--clear-local", is_flag=True, help="Reset local configuration.")
 @click.option("--clear-global", is_flag=True, help="Reset global configuration.")
@@ -109,7 +108,7 @@ def _clear_config(path: Path):
 @click.option("--openai", is_flag=True, help="Configure OpenAI (Interactive).")
 @click.option("--local-ai", is_flag=True, help="Configure Local AI (Interactive).")
 @click.option("--instruction", is_flag=True, help="Set System Instruction.")
-def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show,
+def config_cmd(shell, global_mode, clear_local, clear_global, show,
                editor, code_theme, add_marker, remove_marker,
                gemini, openai, local_ai, instruction):
 
@@ -278,10 +277,7 @@ def config_cmd(shell, stop_warning, global_mode, clear_local, clear_global, show
     #                   LOCAL CONTEXT SETTINGS
     # =========================================================
 
-    if stop_warning:
-        write_local("suppress_history_warning", True)
-        click.echo(f"History warning disabled in {target_name} config.")
-        return
+    
 
     if shell:
         candidates = get_all_history_candidates()

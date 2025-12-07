@@ -8,7 +8,7 @@ import re
 import shutil   
 
 CWM_BANK_NAME = ".cwm"
-INSTRUCTION_FILE = "instruction.txt"  #
+# INSTRUCTION_FILE = "instruction.txt"  #
 
 DEFAULT_AI_INSTRUCTION="""You are DevBot, a senior developer's assistant. Follow these rules:
 *if user aks hello reply hello how can i help you today like this polite and simple.
@@ -29,28 +29,7 @@ DEFAULT_AI_INSTRUCTION="""You are DevBot, a senior developer's assistant. Follow
 """
 
 # Master Defaults (Used by StorageManager for fallbacks)
-DEFAULT_CONFIG = {
-    "history_file": None,
-    "project_markers": [".git", ".cwm", ".cwm-project.txt"],
-    "default_editor": "code",
-    "default_terminal": None,
-    "suppress_history_warning": False,
-    "code_theme": "monokai",
-    
-    # --- AI Configuration (Nested) ---
-    "gemini": {
-        "model": None,
-        "key": None
-    },
-    "openai": {
-        "model": None,
-        "key": None
-    },
-    "local_ai": {
-        "model": None
-    },
-    "ai_instruction": DEFAULT_AI_INSTRUCTION
-}
+DEFAULT_CONFIG = {}
 
 FILE_ATTRIBUTE_HIDDEN = 0x02
 
@@ -137,9 +116,8 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
 
         required_files = {
             "saved_cmds.json": {"last_saved_id": 0, "commands": []},
-            "fav_cmds.json": [],
+            # "fav_cmds.json": [],
             "history.json": {"last_sync_id": 0, "commands": []},
-            "watch_session.json": {"isWatching": False, "startLine": 0}
         }
 
         config_file = folder_path / "config.json"
