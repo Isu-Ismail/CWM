@@ -2,38 +2,34 @@ import click
 import pyperclip
 import json
 from .storage_manager import StorageManager
-from .utils import get_history_file_path, tail_read_last_n_lines,is_cwm_call
+from .utils import get_history_file_path, tail_read_last_n_lines, is_cwm_call
 
-from typing import List, Dict, Any, Tuple
-from pathlib import Path
+from rich.console import Console
+from .rich_help import RichHelpCommand
 
-# --- Helper for History Logic ---
+console = Console()
+
+# --- Helper for History Logic (Unchanged) ---
 def _get_history_commands(manager: StorageManager, cached: bool, active: bool):
     """
     Returns (cmd_list, None)
     """
-    # cached mode unchanged
     if cached:
-        click.echo("Loading from cached history...")
+        console.print("[dim]Loading from cached history...[/dim]")
         hist_obj = manager.load_cached_history()
         return hist_obj.get("commands", []), None
 
-    # ACTIVE MODE (watch session)
     if active:
         session = manager.load_watch_session()
-        
         if not session.get("isWatching"):
-            click.echo("Error: No active watch session. Run 'cwm watch start' first.", err=True)
+            console.print("[bold red]Error:[/bold red] No active watch session. Run 'cwm watch start' first.")
             return [], None
 
-        # read last ~5000 lines
         path = get_history_file_path()
         lines = tail_read_last_n_lines(path, 5000)
-
         collected = []
         found_start = False
 
-        # reverse scan bottom-up
         for line in reversed(lines):
             if "cwm watch start" in line:
                 found_start = True
@@ -43,31 +39,54 @@ def _get_history_commands(manager: StorageManager, cached: bool, active: bool):
         collected.reverse()
 
         if not found_start:
-            click.echo("Warning: Could not locate 'cwm watch start' in recent history.")
-            click.echo("Showing last 50 commands instead.")
+            console.print("[yellow]Warning: Could not locate 'cwm watch start' in recent history.[/yellow]")
+            console.print("Showing last 50 commands instead.")
             collected = collected[-50:]
 
-        click.echo(f"Showing active session: {len(collected)} commands.")
-
+        console.print(f"[dim]Showing active session: {len(collected)} commands.[/dim]")
         return [{"cmd": line} for line in collected], None
 
-    # NORMAL HISTORY MODE
-    # Read last 5000 lines and return all
     path = get_history_file_path()
     lines = tail_read_last_n_lines(path, 5000)
-
     return [{"cmd": line} for line in lines], None
 
 
+# --- Shared Filtering Logic (Fixed) ---
+def _apply_robust_filters(commands, filter_str, exclude_str):
+    """
+    Applies comma-separated filters and exclusions sequentially.
+    FIX: Exclusion now checks if string is IN command, not just starts with.
+    """
+    filtered_list = list(commands)
 
-# --- Helper for Filtering/Displaying ---
+    # 1. Apply Exclusions first (Remove noise)
+    if exclude_str:
+        exclusions = [x.strip() for x in exclude_str.split(',') if x.strip()]
+        for ex in exclusions:
+            filtered_list = [
+                item for item in filtered_list 
+                # FIXED: Changed startswith(ex) to (ex in cmd)
+                if ex not in item.get("cmd", "")
+            ]
+
+    # 2. Apply Filters sequentially (Drill down)
+    if filter_str:
+        filters = [x.strip() for x in filter_str.split(',') if x.strip()]
+        for f in filters:
+            filtered_list = [
+                item for item in filtered_list 
+                if f in item.get("cmd", "") or f in item.get("var", "")
+            ]
+            
+    return filtered_list
+
+
+# --- Helper for Filtering/Displaying History (Compact) ---
 def _filter_and_display(commands: list, count: str, exclude: str, filter: str, list_only: bool):
-    """
-    The core logic for filtering, displaying, and prompting for history.
-    """
     commands.reverse() 
     unique_commands = []
     seen = set()
+    
     for item in commands:
         cmd_str = item.get("cmd")
         if cmd_str and cmd_str not in seen:
@@ -79,20 +98,14 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
     else:
         base_list = unique_commands
 
-    commands_to_display = list(base_list) 
-
-    if exclude:
-        commands_to_display = [
-            item for item in commands_to_display if not item.get("cmd", "").startswith(exclude)
-        ]
-    if filter:
-        commands_to_display = [
-            item for item in commands_to_display if filter in item.get("cmd", "")
-        ]
+    # Apply filters
+    commands_to_display = _apply_robust_filters(base_list, filter, exclude)
 
     total_found = len(commands_to_display)
+    
+    # Fallback if specific filters yield nothing
     if total_found == 0 and (exclude or filter):
-        click.echo(f"No history found matching your filters. Showing default list instead...")
+        console.print(f"[yellow]No history found matching filters. Defaulting...[/yellow]")
         commands_to_display = base_list 
         count = "10" 
         total_found = len(commands_to_display)
@@ -104,79 +117,64 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
             if num_to_show > 0:
                 commands_to_display = commands_to_display[:num_to_show]
             else:
-                raise ValueError("Count must be a positive integer.")
+                raise ValueError
         except ValueError:
-            click.echo(f"Invalid count '{count}'. Must be a positive integer or 'all'. Defaulting to 10.")
+            console.print(f"[red]Invalid count '{count}'. Defaulting to 10.[/red]")
             commands_to_display = commands_to_display[:10]
             is_error_state = True 
     
     commands_to_display.reverse()
 
     if not commands_to_display:
-        click.echo("No history found.")
+        console.print("[yellow]No history found.[/yellow]")
         return
         
-    click.echo(f"--- Showing {len(commands_to_display)} of {total_found} History Commands ---")
+    # --- COMPACT DISPLAY ---
+    console.print(f"[bold underline]History ({len(commands_to_display)}/{total_found})[/bold underline]")
     
     display_map = {}
     for i, item in enumerate(commands_to_display):
-        display_num = i + 1
-        display_map[str(display_num)] = item.get("cmd", "")
-        cmd_text = item.get("cmd", "")
-
-# If ID is None → history mode → do NOT show ID
+        display_num = str(i + 1)
+        display_map[display_num] = item.get("cmd", "")
+        
+        cmd_text = item.get("cmd", "").strip()
         list_id = item.get("id")
-        if list_id is None:
-            click.echo(f"  [{display_num}] {cmd_text}")
+
+        if list_id is not None:
+            console.print(f" [cyan][{display_num}][/cyan] [dim](ID:[/dim] [green]{list_id}[/green][dim])[/dim] {cmd_text}")
         else:
-            click.echo(f"  [{display_num}] (ID: {list_id}) {cmd_text}")
+            console.print(f" [cyan][{display_num}][/cyan] {cmd_text}")
 
-
-    click.echo("---")
+    console.print("[dim]---[/dim]")
     
     if list_only or is_error_state:
         return 
 
     try:
-        choice = click.prompt("Enter number to copy (or press Enter to skip)", default="", show_default=False)
+        choice = click.prompt("Copy #", default="", show_default=False)
         if not choice:
             return
         if choice in display_map:
             command_to_copy = display_map[choice]
             pyperclip.copy(command_to_copy)
-            click.echo(f"Copied command {choice} to clipboard.")
+            console.print(f"[bold green]Copied #{choice}![/bold green]")
         else:
-            click.echo(f"Error: '{choice}' is not a valid number from the list.")
+            console.print(f"[red]Invalid number.[/red]")
     except click.exceptions.Abort:
-        click.echo("\nCancelled.")
+        console.print("\nCancelled.")
 
 
-
-# --- Helper: Filter Saved (UPDATED) ---
+# --- Helper: Filter Saved (Compact) ---
 def _filter_and_display_saved(commands: list, count: str, exclude: str, filter: str, tag: str, skip_prompt: bool = False):
-    """
-    skip_prompt: If True, lists commands and exits without asking to copy.
-    """
-    commands_to_display = list(commands) 
-
-    if exclude:
-        commands_to_display = [
-            item for item in commands_to_display if not item.get("cmd", "").startswith(exclude)
-        ]
-    if filter:
-        commands_to_display = [
-            item for item in commands_to_display 
-            if filter in item.get("cmd", "") or filter in item.get("var", "")
-        ]
     if tag:
-        commands_to_display = [
-            item for item in commands_to_display if tag in item.get("tags", [])
-        ]
+        commands = [item for item in commands if tag in item.get("tags", [])]
+
+    commands_to_display = _apply_robust_filters(commands, filter, exclude)
 
     total_found = len(commands_to_display)
     
     if total_found == 0:
-        click.echo("No saved commands found matching your filters.")
+        console.print("[yellow]No saved commands found.[/yellow]")
         return
 
     commands_to_display.reverse()
@@ -187,94 +185,88 @@ def _filter_and_display_saved(commands: list, count: str, exclude: str, filter: 
             if num_to_show > 0:
                 commands_to_display = commands_to_display[:num_to_show]
         except ValueError:
-            click.echo(f"Invalid count '{count}'. Defaulting to 10.")
             commands_to_display = commands_to_display[:10]
     
     commands_to_display.reverse()
 
-    click.echo(f"--- Showing {len(commands_to_display)} of {total_found} Saved Commands ---")
+    console.print(f"[bold underline]Saved Commands ({len(commands_to_display)}/{total_found})[/bold underline]")
     
     display_map = {}
     for i, item in enumerate(commands_to_display):
-        display_num = i + 1
-        display_map[str(display_num)] = item.get("cmd", "")
+        display_num = str(i + 1)
+        display_map[display_num] = item.get("cmd", "")
         
         sid = item.get("id")
-        var = item.get("var") or "(raw)"
-        cmd = item.get("cmd")
-        fav = "* " if item.get("fav") else ""
-        click.echo(f"  [{display_num}] (ID: {sid}) {fav}{var} -- {cmd}")
+        var = item.get("var") or ""
+        cmd = item.get("cmd", "")
+        fav = "[yellow]★[/yellow] " if item.get("fav") else ""
+        
+        var_str = f"[bold white]{var}[/bold white] " if var else ""
+        console.print(f" [cyan][{display_num}][/cyan] [dim](ID:[/dim] [green]{sid}[/green][dim])[/dim] {fav}{var_str}[dim]--[/dim] {cmd}")
 
-    click.echo("---")
+    console.print("[dim]---[/dim]")
 
-    # --- FIX: Check skip_prompt flag ---
     if skip_prompt:
         return
 
     try:
-        choice = click.prompt("Enter number to copy (or press Enter to skip)", default="", show_default=False)
+        choice = click.prompt("Copy #", default="", show_default=False)
         if not choice:
             return
         if choice in display_map:
             command_to_copy = display_map[choice]
             pyperclip.copy(command_to_copy)
-            click.echo(f"Copied command {choice}: {command_to_copy} to clipboard.")
+            console.print(f"[bold green]Copied #{choice}![/bold green]")
         else:
-            click.echo(f"Error: '{choice}' is not a valid number from the list.")
+            console.print(f"[red]Invalid number.[/red]")
     except click.exceptions.Abort:
-        click.echo("\nCancelled.")
+        console.print("\nCancelled.")
+
 
 # --- THE MAIN GET COMMAND ---
-@click.command("get")
+@click.command("get", cls=RichHelpCommand)
 @click.argument("name_or_id", required=False)
-@click.option("--id", "id_flag", type=int, help="Get a saved command by its unique ID.")
-@click.option("-s", "--show", "show_flag", is_flag=True, help="[Saved] Show command without copying.")
-@click.option("-l", "list_mode", is_flag=True, help="[Saved] List saved commands and prompt to copy.")
-@click.option("-t", "tag_flag", help="[Saved List] Filter by tag.")
-@click.option("-h", "--hist", "hist_flag", is_flag=True, help="Switch to HISTORY mode.")
-@click.option("-a", "--active", "active_flag", is_flag=True, help="[History] Show active watch session only.")
-@click.option("-n", "count", default="10", help="[List/History] Show last N commands or 'all'.")
-@click.option("-ex", "exclude", help="[List/History] Exclude commands starting with this string.")
-@click.option("-f", "filter", help="[List/History] Filter for commands containing this string.")
-@click.option("--cached", "cached_flag", is_flag=True, help="[History] Get from CWM's saved history cache.")
+@click.option("--id", "id_flag", type=int, help="Get by ID.")
+@click.option("-s", "--show", "show_flag", is_flag=True, help="Show without copying.")
+@click.option("-l", "list_mode", is_flag=True, help="List saved commands.")
+@click.option("-t", "tag_flag", help="Filter by tag.")
+@click.option("-h", "--hist", "hist_flag", is_flag=True, help="History mode.")
+@click.option("-a", "--active", "active_flag", is_flag=True, help="Active session only.")
+@click.option("-n", "count", default="10", help="Show last N commands.")
+@click.option("-ex", "exclude", help="Exclude (comma separated).")
+@click.option("-f", "filter", help="Filter (comma separated pipeline).")
+@click.option("--cached", "cached_flag", is_flag=True, help="Use CWM cache.")
 def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
             hist_flag, active_flag, count, exclude, filter, cached_flag):
     """
-    Get saved commands, live history
-    
-    Default behavior for saved commands is to COPY to clipboard.
-    Use -s to only show.
+    Get saved commands or live history.
     """
     manager = StorageManager()
-
-
 
     # --- MODE 2: History ---
     if hist_flag or cached_flag or active_flag:
         if id_flag or name_or_id or tag_flag or show_flag:
-            click.echo("Error: --hist cannot be used with saved command flags (like --id or -s).")
+            console.print("[red]Error: --hist cannot be used with saved command flags.[/red]")
             return
         if cached_flag and active_flag:
-            click.echo("Error: --cached and --active (-a) flags cannot be used together.")
+            console.print("[red]Error: --cached and --active flags conflict.[/red]")
             return
         
         commands_list, total_lines = _get_history_commands(manager, cached_flag, active_flag)
-        
-        
-        
         _filter_and_display(commands_list, count, exclude, filter, list_only=list_mode)
         return
 
+    # --- MODE 1: Saved Commands List ---
     if list_mode or tag_flag:
         if name_or_id or id_flag:
-            click.echo("Error: -l or -t cannot be used with a specific var_name or --id.")
+            console.print("[red]Error: -l or -t cannot be used with var_name or --id.[/red]")
             return
         data_obj = manager.load_saved_cmds()
         commands = data_obj.get("commands", [])
-        # Pass show_flag as skip_prompt
         _filter_and_display_saved(commands, count, exclude, filter, tag_flag, skip_prompt=show_flag)
         return
 
+    # --- MODE 3: Get Specific Saved Command ---
     data_obj = manager.load_saved_cmds()
     commands = data_obj.get("commands", [])
     command_to_get = None
@@ -290,15 +282,16 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode, tag_flag,
                 command_to_get = cmd.get("cmd")
                 break
     else:
+        # Default action: list saved
         _filter_and_display_saved(commands, "10", None, None, None, skip_prompt=show_flag)
         return
 
     if not command_to_get:
-        click.echo(f"Error: Command '{name_or_id or id_flag}' not found in saved commands.")
+        console.print(f"[red]Error: '{name_or_id or id_flag}' not found.[/red]")
         return
 
     if show_flag:
-        click.echo(command_to_get)
+        console.print(command_to_get)
     else:
         pyperclip.copy(command_to_get)
-        click.echo(f"Command '{name_or_id or id_flag}' copied to clipboard.")
+        console.print(f"[bold green]Copied to clipboard![/bold green]")

@@ -458,32 +458,32 @@ class StorageManager:
     def get_bank_path(self):
         return self.bank_path
     
-    def get_config(self) -> dict:
+    def get_config(self, scope: str = "global") -> dict:
         """
-        Smart Configuration Loader.
-        1. Loads GLOBAL config first (Base Layer).
-        2. Loads LOCAL config second (Override Layer).
-        3. Returns merged dictionary.
-        """
-        # 1. Base: Global Defaults
-        final_config = DEFAULT_CONFIG.copy()
+        Loads a specific configuration file without merging.
         
-        # 2. Overlay: Global File
-        global_conf = GLOBAL_CWM_BANK / "config.json"
-        if global_conf.exists():
-            try:
-                global_data = json.loads(global_conf.read_text())
-                final_config.update(global_data)
-            except: pass
+        Args:
+            scope (str): "global" for ~/.cwm/config.json 
+                         "local"  for current_project/.cwm/config.json
+        """
+        # 1. Determine which file to load
+        if scope == "local":
+            root = self.find_project_root()
+            config_path = root / ".cwm" / "config.json"
+        else:
+            # Default to Global
+            config_path = GLOBAL_CWM_BANK / "config.json"
 
-        # 3. Overlay: Local File (If different from Global)
-        if self.config_file != global_conf and self.config_file.exists():
-            try:
-                local_data = json.loads(self.config_file.read_text())
-                final_config.update(local_data)
-            except: pass
-            
-        return final_config
+        # 2. Define a safe default if file is missing
+        # (You can define DEFAULT_CONFIG at top of file or use empty dict)
+        default_data = {
+            "history_file": None,
+            "project_markers": [],
+            "code_theme": "monokai"
+        }
+
+        # 3. Load using our smart loader (validates & handles partials)
+        return self._load_json(config_path, default=default_data)
 
     def update_config(self, key: str, value):
         try:

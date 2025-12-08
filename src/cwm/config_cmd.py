@@ -1,107 +1,94 @@
-# cwm/config_cmd.py
 import click
+import re
 import json
 from pathlib import Path
-from .storage_manager import StorageManager, GLOBAL_CWM_BANK
-from .utils import get_all_history_candidates, find_nearest_bank_path, DEFAULT_CONFIG
-from .schema_validator import validate, SCHEMAS
-import re
 
+# Rich Imports
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+from rich.prompt import Prompt, IntPrompt, Confirm
+
+from .storage_manager import StorageManager, GLOBAL_CWM_BANK, find_nearest_bank_path
+from .rich_help import RichHelpCommand
+from .utils import get_all_history_candidates
+
+console = Console()
 GLOBAL_CONFIG_PATH = GLOBAL_CWM_BANK / "config.json"
 
-
 # =========================================================
-#   VALIDATED CONFIG LOAD/SAVE HELPERS (patched)
+# HELPERS (Private)
 # =========================================================
-
 def _load_global_config():
-    """Load global config using StorageManager + validator."""
-    mgr = StorageManager()
-    return mgr._load_json(GLOBAL_CONFIG_PATH, DEFAULT_CONFIG)
+    if not GLOBAL_CONFIG_PATH.exists():
+        return {}
+    try:
+        return json.loads(GLOBAL_CONFIG_PATH.read_text())
+    except:
+        return {}
 
-
-def _save_global_config(data: dict):
-    """Save global config safely with validation."""
-    mgr = StorageManager()
-    mgr._save_json(GLOBAL_CONFIG_PATH, data)
-
-
-def _load_local_config(path: Path):
-    """Load local config safely with validation."""
-    mgr = StorageManager()
-    return mgr._load_json(path, DEFAULT_CONFIG)
-
-
-def _save_local_config(path: Path, data: dict):
-    """Save local config with validation."""
-    mgr = StorageManager()
-    mgr._save_json(path, data)
-
-
-# =========================================================
-#   GENERIC WRITE HELPERS (patched)
-# =========================================================
+def _save_global_config(data):
+    if not GLOBAL_CWM_BANK.exists():
+        GLOBAL_CWM_BANK.mkdir(parents=True, exist_ok=True)
+    GLOBAL_CONFIG_PATH.write_text(json.dumps(data, indent=4))
 
 def _write_config(path: Path, key: str, value):
-    """Safe config writer (auto-validate & auto-load)."""
-    mgr = StorageManager()
-    data = mgr._load_json(path, DEFAULT_CONFIG)
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except:
+            pass
+    
     data[key] = value
-    mgr._save_json(path, data)
-
-
-def _modify_config_list(path: Path, key: str, item: str, action: str):
-    """Safe add/remove to list config keys."""
-    mgr = StorageManager()
-    data = mgr._load_json(path, DEFAULT_CONFIG)
-
-    # Always ensure list type
-    current_list = data.get(key, [])
-    if not isinstance(current_list, list):
-        current_list = []
-
-    modified = False
-
-    if action == "add":
-        if item not in current_list:
-            current_list.append(item)
-            modified = True
-            click.echo(f"Added '{item}' to {key}.")
-        else:
-            click.echo(f"'{item}' is already in {key}.")
-
-    elif action == "remove":
-        if item in current_list:
-            current_list.remove(item)
-            modified = True
-            click.echo(f"Removed '{item}' from {key}.")
-        else:
-            click.echo(f"'{item}' not found in {key}.")
-
-    if modified:
-        data[key] = current_list
-        mgr._save_json(path, data)
-
+    path.write_text(json.dumps(data, indent=4))
 
 def _clear_config(path: Path):
-    """Reset config to empty validated object."""
-    mgr = StorageManager()
-    mgr._save_json(path, {})
-    return True
+    if path and path.exists():
+        path.unlink()
+
+def _modify_config_list(path: Path, key: str, value: str, action: str):
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except: pass
+        
+    current_list = data.get(key, [])
+    if not isinstance(current_list, list): current_list = []
+    
+    if action == "add":
+        if value not in current_list:
+            current_list.append(value)
+            console.print(f"  [green]✔ Added '{value}' to {key}.[/green]")
+        else:
+            console.print(f"  [yellow]! '{value}' is already in {key}.[/yellow]")
+    elif action == "remove":
+        if value in current_list:
+            current_list.remove(value)
+            console.print(f"  [green]✔ Removed '{value}' from {key}.[/green]")
+        else:
+            console.print(f"  [yellow]! '{value}' not found in {key}.[/yellow]")
+            
+    data[key] = current_list
+    path.write_text(json.dumps(data, indent=4))
 
 
 # =========================================================
-#   COMMAND LOGIC (unchanged except safe writers)
+# MAIN COMMAND
 # =========================================================
-
-@click.command("config",help="command to edit configure file")
+@click.command("config", help="Edit configuration settings.", cls=RichHelpCommand)
 @click.option("--shell", is_flag=True, help="Select preferred shell history file.")
 @click.option("--global", "global_mode", is_flag=True, help="Target Global config explicitly.")
 @click.option("--clear-local", is_flag=True, help="Reset local configuration.")
 @click.option("--clear-global", is_flag=True, help="Reset global configuration.")
 @click.option("--show", is_flag=True, help="Show configuration.")
 @click.option("--editor", help="Set default editor.")
-@click.option("--code-theme", help="Set code syntax highlighting theme (e.g. monokai).")
+@click.option("--code-theme", help="Set code syntax highlighting theme.")
 @click.option("--add-marker", help="Add project detection marker.")
 @click.option("--remove-marker", help="Remove project detection marker.")
 @click.option("--gemini", is_flag=True, help="Configure Gemini (Interactive).")
@@ -118,8 +105,9 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
     local_bank = find_nearest_bank_path(Path.cwd())
     local_config = local_bank / "config.json" if local_bank else None
 
+    # Logic: If global flag set, ignore local. Else prefer local if available.
     target_path = GLOBAL_CONFIG_PATH if global_mode else (local_config or GLOBAL_CONFIG_PATH)
-    target_name = "Global" if global_mode else "Active"
+    target_name = "Global" if global_mode else ("Local" if local_config and not global_mode else "Global")
 
     def write_global(key, value):
         _write_config(GLOBAL_CONFIG_PATH, key, value)
@@ -128,141 +116,155 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         if local_config:
             _write_config(local_config, key, value)
         else:
+            # Fallback if no local config exists yet
             write_global(key, value)
 
     # =========================================================
-    #                  SHOW CONFIG
+    # SHOW CONFIG
     # =========================================================
-
     if show:
-        click.echo("--- CWM Configuration ---")
+        console.print("")
+        config = manager.get_config() # This gets merged/effective config usually
 
+        # 1. Paths Info
+        path_text = Text()
+        path_text.append("Global Config: ", style="dim")
+        path_text.append(f"{GLOBAL_CONFIG_PATH}\n", style="cyan")
+        
+        path_text.append("Local Config:  ", style="dim")
         if local_bank:
-            local_conf = local_bank / "config.json"
-            click.echo(f"Local Config:  {local_conf} ({'Exists' if local_conf.exists() else 'Not created'})")
+            l_path = local_bank / "config.json"
+            status = "[green](Active)[/green]" if l_path.exists() else "[dim](Not created)[/dim]"
+            path_text.append(f"{l_path} {status}", style="magenta")
         else:
-            click.echo("Local Config:  (No local bank found)")
+            path_text.append("(No local bank detected)", style="dim")
 
-        click.echo(f"Global Config: {GLOBAL_CONFIG_PATH} ({'Exists' if GLOBAL_CONFIG_PATH.exists() else 'Not created'})")
+        console.print(Panel(path_text, title="[bold]Configuration Sources[/bold]", border_style="dim"))
 
-        config = manager.get_config()
+        # 2. Settings Info
+        settings_text = Text()
+        settings_text.append(f"Target:         {target_name}\n", style="bold yellow")
+        settings_text.append(f"History File:   {config.get('history_file', 'Auto-Detect')}\n")
+        settings_text.append(f"Default Editor: {config.get('default_editor', 'code')}\n")
+        settings_text.append(f"Code Theme:     {config.get('code_theme', 'monokai')}\n")
+        
+        markers = config.get('project_markers', [])
+        settings_text.append(f"Markers:        {', '.join(markers) if markers else 'None'}")
 
-        click.echo(f"\n--- Effective Settings ({target_name}) ---")
-        click.echo(f"History File:   {config.get('history_file', 'Auto-Detect')}")
-        click.echo(f"Default Editor: {config.get('default_editor', 'code')}")
-        click.echo(f"Code Theme:     {config.get('code_theme', 'monokai')}")
-        click.echo(f"Markers:        {', '.join(config.get('project_markers', []))}")
+        console.print(Panel(settings_text, title="[bold]General Settings[/bold]", border_style="blue"))
 
-        click.echo("\n--- AI Configuration ---")
-        def show_key(prefix):
-            g = config.get(prefix, {})
-            k = g.get("key")
-            if k:
-                k = f"{k[:4]}...{k[-4:]}"
-            click.echo(f"{prefix.capitalize()}: Model='{g.get('model')}', Key='{k}'")
+        # 3. AI Info
+        ai_text = Text()
+        
+        def format_key(k): return f"{k[:4]}...{k[-4:]}" if k else "Not Set"
 
-        show_key("gemini")
-        show_key("openai")
+        # Gemini
+        g = config.get("gemini", {})
+        ai_text.append("Gemini:   ", style="bold cyan")
+        ai_text.append(f"Model='{g.get('model') or 'None'}'  Key='{format_key(g.get('key'))}'\n")
 
-        l_conf = config.get("local_ai", {})
-        click.echo(f"Local:  Model='{l_conf.get('model')}'")
+        # OpenAI
+        o = config.get("openai", {})
+        ai_text.append("OpenAI:   ", style="bold green")
+        ai_text.append(f"Model='{o.get('model') or 'None'}'  Key='{format_key(o.get('key'))}'\n")
 
+        # Local
+        l = config.get("local_ai", {})
+        ai_text.append("Local AI: ", style="bold magenta")
+        ai_text.append(f"Model='{l.get('model') or 'None'}'\n\n")
+
+        # Instruction
         instr = config.get("ai_instruction")
         if instr:
-            preview = instr[:50].replace("\n", " ")
-            click.echo(f"Instruction: {preview}...")
-
+            preview = instr[:60].replace("\n", " ") + "..." if len(instr) > 60 else instr
+            ai_text.append(f"Instruction: [dim]{preview}[/dim]")
         else:
-            click.echo("Instruction: (Default)")
+            ai_text.append("Instruction: [dim](Default)[/dim]")
 
+        console.print(Panel(ai_text, title="[bold]AI Configuration[/bold]", border_style="magenta"))
+        console.print("")
         return
 
     # =========================================================
-    #                     AI WIZARDS
+    # AI WIZARDS
     # =========================================================
-
     if gemini:
-        click.echo("--- Configure Gemini ---")
+        console.print("\n[bold cyan]?[/bold cyan] [bold]Configure Gemini[/bold]")
         data = _load_global_config()
-
         cur = data.get("gemini", {})
-        model = click.prompt("Enter Model Name", default=cur.get("model") or "", show_default=False)
-        key = click.prompt("Enter API Key", default=cur.get("key") or "", show_default=False)
+        
+        model = Prompt.ask("  [cyan]Model Name[/cyan]", default=cur.get("model") or "gemini-pro")
+        key = Prompt.ask("  [cyan]API Key[/cyan]", default=cur.get("key") or "", password=True)
 
+        data.setdefault("gemini", {})
         data["gemini"]["model"] = model.strip() or None
         data["gemini"]["key"] = key.strip() or None
 
         _save_global_config(data)
-        click.echo("Gemini configuration saved.")
+        console.print("  [green]✔ Gemini configuration saved.[/green]\n")
         return
 
     if openai:
-        click.echo("--- Configure OpenAI ---")
+        console.print("\n[bold green]?[/bold green] [bold]Configure OpenAI[/bold]")
         data = _load_global_config()
-
         cur = data.get("openai", {})
-        model = click.prompt("Enter Model Name", default=cur.get("model") or "", show_default=False)
-        key = click.prompt("Enter API Key", default=cur.get("key") or "", show_default=False)
+        
+        model = Prompt.ask("  [green]Model Name[/green]", default=cur.get("model") or "gpt-4")
+        key = Prompt.ask("  [green]API Key[/green]", default=cur.get("key") or "", password=True)
 
+        data.setdefault("openai", {})
         data["openai"]["model"] = model.strip() or None
         data["openai"]["key"] = key.strip() or None
 
         _save_global_config(data)
-        click.echo("OpenAI configuration saved.")
+        console.print("  [green]✔ OpenAI configuration saved.[/green]\n")
         return
 
     if local_ai:
-        click.echo("--- Configure Local AI ---")
+        console.print("\n[bold magenta]?[/bold magenta] [bold]Configure Local AI[/bold]")
         data = _load_global_config()
-
         cur = data.get("local_ai", {})
-        model = click.prompt("Enter Model Name", default=cur.get("model") or "", show_default=False)
+        
+        model = Prompt.ask("  [magenta]Model Name[/magenta]", default=cur.get("model") or "llama3")
+        
+        data.setdefault("local_ai", {})
         data["local_ai"]["model"] = model.strip() or None
 
         _save_global_config(data)
-        click.echo("Local AI configuration saved.")
+        console.print("  [green]✔ Local AI configuration saved.[/green]\n")
         return
 
     if instruction:
-        click.echo("--- Configure System Instruction ---")
+        console.print("\n[bold cyan]?[/bold cyan] [bold]System Instruction[/bold]")
+        console.print("  [dim]Tip: Enter text directly OR path to a file (e.g. C:/prompts/coder.txt)[/dim]\n")
         
-        click.echo(
-            "Tip: Enter the instruction text directly, or provide an absolute path to a text file (e.g., C:/path/file.txt)."
-        )
-        
-        user_input = click.prompt("Input")
-
-        # Clean quotes immediately so we don't save extra quotes to config
+        user_input = Prompt.ask("  [cyan]Input[/cyan]")
         cleaned_input = user_input.strip().strip('"').strip("'")
         
         path_check = Path(cleaned_input)
+        final_val = cleaned_input
 
-        # Check if it is a file, but do NOT read it yet. We only want to save the path.
         if path_check.exists() and path_check.is_file():
-            click.echo(f"Valid file path detected: {path_check.name}")
-            final_val = cleaned_input
-        else:
-            # Not a file, treat input as raw instruction text
-            final_val = cleaned_input
-            
-        # Escape backslashes for JSON storage (C:\ becomes C:\\)
+            console.print(f"  [green]✔ File detected:[/green] {path_check.name}")
+        
+        # Escape backslashes for JSON storage
         final_val = re.sub(r'\\', r'\\\\', final_val)
 
         write_global("ai_instruction", final_val)
-        click.echo("Instruction updated.")
+        console.print("  [green]✔ Instruction updated.[/green]\n")
         return
-    # =========================================================
-    #                STANDARD GLOBAL SETTINGS
-    # =========================================================
 
+    # =========================================================
+    # STANDARD SETTINGS
+    # =========================================================
     if editor:
         write_global("default_editor", editor)
-        click.echo(f"Default editor set to: {editor}")
+        console.print(f"  [green]✔ Default editor set to:[/green] {editor}")
         return
 
     if code_theme:
         write_global("code_theme", code_theme)
-        click.echo(f"Code theme set to: {code_theme}")
+        console.print(f"  [green]✔ Code theme set to:[/green] {code_theme}")
         return
 
     if add_marker:
@@ -274,48 +276,48 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         return
 
     # =========================================================
-    #                   LOCAL CONTEXT SETTINGS
+    # SHELL SELECTION
     # =========================================================
-
-    
-
     if shell:
         candidates = get_all_history_candidates()
         if not candidates:
-            click.echo("No history files found.")
+            console.print("  [yellow]! No history files found.[/yellow]")
             return
 
-        click.echo(f"Available History Files ({target_name}):")
+        console.print(f"\n[bold]Select History File[/bold] [dim]({target_name})[/dim]")
+        
+        table = Table(show_header=False, box=None, padding=(0, 2))
         for i, path in enumerate(candidates):
-            click.echo(f"  [{i+1}] {path}")
+            table.add_row(f"[cyan]{i+1})[/cyan]", str(path))
+        
+        console.print(table)
+        console.print("")
 
-        try:
-            selection = click.prompt("Select history file ID", type=int)
-            if 1 <= selection <= len(candidates):
-                write_local("history_file", str(candidates[selection - 1]))
-                click.echo(f"Updated history source: {candidates[selection - 1]}")
-            else:
-                click.echo("Invalid selection.")
-        except click.Abort:
-            click.echo("\nCancelled.")
+        choices = [str(x) for x in range(1, len(candidates) + 1)]
+        selection = IntPrompt.ask("  [cyan]Enter number[/cyan]", choices=choices, show_choices=False)
+        
+        selected_path = candidates[selection - 1]
+        write_local("history_file", str(selected_path))
+        
+        console.print(f"  [green]✔ History source updated:[/green] {selected_path.name}")
         return
 
     # =========================================================
-    #                        CLEANUP
+    # CLEANUP
     # =========================================================
-
     if clear_local:
         if not local_bank:
-            click.echo("Error: No local bank found.")
+            console.print("  [red]✖ Error: No local bank found.[/red]")
             return
         _clear_config(local_config)
-        click.echo("Local configuration cleared.")
+        console.print("  [green]✔ Local configuration cleared.[/green]")
         return
 
     if clear_global:
         _clear_config(GLOBAL_CONFIG_PATH)
-        click.echo("Global configuration cleared.")
+        console.print("  [green]✔ Global configuration cleared.[/green]")
         return
 
-    click.echo("Usage: cwm config [OPTIONS]")
-    click.echo("Try 'cwm config --help' for details.")
+    # Fallback Help
+    console.print("\n[dim]Usage: cwm config [OPTIONS][/dim]")
+    console.print("[dim]Try 'cwm config --help' for details.[/dim]\n")

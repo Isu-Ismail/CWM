@@ -212,3 +212,75 @@ def detect_project_type(path: Path) -> str:
 def get_gitignore_content(template_name: str) -> str:
     """Returns the content for the selected template."""
     return TEMPLATES.get(template_name, TEMPLATES["Generic"]).strip()
+
+# src/cwm/git_utils.py
+
+def remove_ssh_keys(key_path_str: str) -> bool:
+    """Deletes the private and public key files."""
+    try:
+        key_path = Path(key_path_str)
+        pub_key_path = key_path.with_suffix(".pub")
+        
+        if key_path.exists():
+            key_path.unlink()
+            
+        if pub_key_path.exists():
+            pub_key_path.unlink()
+            
+        return True
+    except Exception:
+        return False
+
+def remove_from_ssh_config(alias: str):
+    """
+    Removes the Host block for the given alias from ~/.ssh/config.
+    Target Host format: github.com-{alias}
+    Also removes the preceding comment header if present.
+    """
+    ssh_path = Path.home() / ".ssh" / "config"
+    if not ssh_path.exists():
+        return
+
+    lines = ssh_path.read_text(encoding="utf-8").splitlines()
+    new_lines = []
+    skip_mode = False
+    
+    # The host string CWM uses is "github.com-alias"
+    target_host = f"github.com-{alias}"
+    target_comment_marker = f"CWM Account: {alias}"
+
+    for line in lines:
+        stripped = line.strip()
+        parts = stripped.split()
+
+        # 1. Check for the HOST definition line
+        if len(parts) >= 2 and parts[0] == "Host" and parts[1] == target_host:
+            skip_mode = True
+            
+            # CLEANUP: Check if the previous line added was the CWM comment header
+            # If so, remove it from the list so we don't leave an orphan comment
+            if new_lines:
+                last_line = new_lines[-1].strip()
+                if last_line.startswith("#") and target_comment_marker in last_line:
+                    new_lines.pop()
+            continue
+
+        # 2. Check if we hit the START of a NEXT block (Exit skip mode)
+        # Stop skipping if we see a new "Host" line
+        if skip_mode and len(parts) >= 2 and parts[0] == "Host":
+            skip_mode = False
+            new_lines.append(line)
+            continue
+            
+        # Stop skipping if we see a new CWM comment header
+        if skip_mode and stripped.startswith("# --- CWM Account:"):
+            skip_mode = False
+            new_lines.append(line)
+            continue
+
+        # 3. Keep the line if we are not in skip mode
+        if not skip_mode:
+            new_lines.append(line)
+
+    # Write back clean config
+    ssh_path.write_text("\n".join(new_lines).strip() + "\n", encoding="utf-8")

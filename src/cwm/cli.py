@@ -1,17 +1,18 @@
-# src/cwm/cli.py
 import click
 import platform 
 from difflib import get_close_matches
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
+# Import minimal utils only
 from .utils import (
     is_history_sync_enabled,
     safe_create_cwm_folder,
-    get_history_file_path ,
+    get_history_file_path,
     is_path_literally_inside_bank,
-    CWM_BANK_NAME,has_write_permission
+    CWM_BANK_NAME, has_write_permission
 )
+from .rich_help import RichHelpCommand,RichHelpGroup
 
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 
@@ -20,30 +21,30 @@ try:
 except PackageNotFoundError:
     __version__ = "2.0.0" 
 
-# --- LAZY LOADING MAPPING ---
+# --- OPTIMIZED COMMAND MAP (Now includes descriptions) ---
+# Format: "command": ("module", "function", "Description for help menu")
 COMMAND_MAP = {
     # Workspace
-    "jump":    (".jump_cmd", "jump_cmd"),
-    "project": (".project_cmd", "project_cmd"),
-    "run":     (".run_cmd", "run_cmd"),
-    "group":   (".group_cmd", "group_cmd"),
+    "jump":    (".jump_cmd", "jump_cmd", "Jump to a project"),
+    "project": (".project_cmd", "project_cmd", "Manage project scanning & aliases"),
+    "run":     (".run_cmd", "run_cmd", "Run scripts from project config"),
+    "group":   (".group_cmd", "group_cmd", "Manage project groups"),
     
     # Core
-    "save":    (".save_cmd", "save_command"),
-    "get":     (".get_cmd", "get_cmd"),
-    "config":  (".config_cmd", "config_cmd"),
-    "git":     (".git_cmd", "git_cmd"),
+    "save":    (".save_cmd", "save_command", "Save commands or variables"),
+    "get":     (".get_cmd", "get_cmd", "Retrieve saved commands"),
+    "config":  (".config_cmd", "config_cmd", "Manage configuration"),
+    "git":     (".git_cmd", "git_cmd", "Manage GitHub accounts & SSH"),
     
     # Utils
-    "copy":    (".copy_cmd", "copy_cmd"),
-    "watch":   (".watch_cmd", "watch_cmd"),
-    "bank":    (".bank_cmd", "bank_cmd"),
-    "clear":   (".clear_cmd", "clear_cmd"),
-    "setup":   (".setup_cmd", "setup_cmd"),
-    "ask":     (".ask_cmd", "ask_cmd"),
+    "copy":    (".copy_cmd", "copy_cmd", "Copy file contents to clipboard"),
+    "watch":   (".watch_cmd", "watch_cmd", "Record project-specific history"),
+    "bank":    (".bank_cmd", "bank_cmd", "Manage storage locations"),
+    "clear":   (".clear_cmd", "clear_cmd", "Clear/clean history & data"),
+    "setup":   (".setup_cmd", "setup_cmd", "Install shell hooks"),
+    "ask":     (".ask_cmd", "ask_cmd", "Ask AI for command help"),
 }
 
-# Define Category Order
 CATEGORIES = {
     "Workspace & Navigation": ["project", "jump", "group", "run"],
     "Core & Configuration":   ["init", "hello", "config", "setup"],
@@ -62,16 +63,13 @@ class LazyGroup(click.Group):
 
         # 2. Handle Lazy Loaded Commands
         if cmd_name in COMMAND_MAP:
-            module_name, func_name = COMMAND_MAP[cmd_name]
+            module_name, func_name, _ = COMMAND_MAP[cmd_name] # Ignore desc here
             try:
                 mod = __import__(f"cwm{module_name}", fromlist=[func_name])
                 return getattr(mod, func_name)
             except ImportError as e:
+                # Error handling remains the same...
                 click.echo(f"Error loading command '{cmd_name}': {e}", err=True)
-                if "flet" in str(e) or "psutil" in str(e):
-                    click.echo("Hint: Run 'pip install cwm-cli[gui]'", err=True)
-                if "google" in str(e) or "openai" in str(e):
-                    click.echo("Hint: Run 'pip install cwm-cli[ai]'", err=True)
                 return None
             except AttributeError:
                 return None
@@ -86,55 +84,53 @@ class LazyGroup(click.Group):
 
     def format_commands(self, ctx, formatter):
         """
-        Overridden method to output grouped help with COLOR.
+        FAST HELP: Reads descriptions from COMMAND_MAP instead of importing modules.
         """
-        commands = []
-        for subcommand in self.list_commands(ctx):
-            cmd = self.get_command(ctx, subcommand)
-            if cmd is None or cmd.hidden:
-                continue
-            commands.append((subcommand, cmd))
+        # 1. Built-in Commands (Must get manually since they aren't in map)
+        commands = [
+            ("init", init.get_short_help_str()),
+            ("hello", hello.get_short_help_str())
+        ]
+
+        # 2. Lazy Commands (Read strings from Map directly!)
+        for name, data in COMMAND_MAP.items():
+            desc = data[2] # Index 2 is the description
+            commands.append((name, desc))
 
         if not commands:
             return
 
-        # Calculate width based on raw length to ensure alignment works with colors
-        limit = formatter.width - 6 - max(len(cmd[0]) for cmd in commands)
+        limit = formatter.width - 6 - max(len(c[0]) for c in commands)
 
-        # Create lookup map (Command -> Category)
+        # Bucket commands
         cmd_to_cat = {}
         for cat, cmds in CATEGORIES.items():
             for c in cmds:
                 cmd_to_cat[c] = cat
 
-        # Bucket commands
         buckets = {cat: [] for cat in CATEGORIES}
         buckets["Other Commands"] = []
 
-        for name, cmd in commands:
+        for name, help_text in commands:
             cat = cmd_to_cat.get(name, "Other Commands")
-            help_text = cmd.get_short_help_str(limit)
             buckets[cat].append((name, help_text))
 
-        # Print Categories with Color
+        # Print Categories
         for cat in CATEGORIES:
             if buckets[cat]:
-                # Heading: Yellow & Bold
                 heading = click.style(cat, fg="yellow", bold=True)
                 with formatter.section(heading):
-                    # Commands: Green
                     styled_rows = [
                         (click.style(name, fg="green"), help_text) 
-                        for name, help_text in buckets[cat]
+                        for name, help_text in sorted(buckets[cat])
                     ]
                     formatter.write_dl(styled_rows)
         
-        # Print Others
         if buckets["Other Commands"]:
             with formatter.section(click.style("Other Commands", fg="yellow", bold=True)):
                 styled_rows = [
                     (click.style(name, fg="green"), help_text) 
-                    for name, help_text in buckets["Other Commands"]
+                    for name, help_text in sorted(buckets["Other Commands"])
                 ]
                 formatter.write_dl(styled_rows)
 
@@ -143,7 +139,6 @@ CONTEXT_SETTINGS = dict(
     max_content_width=120
 )
 
-# Footer Content
 DOCS_LINK = "https://isu-ismail.github.io/cwm-docwebsite/index.html"
 FOOTER = f"Developed by ISU | Docs: {DOCS_LINK}"
 
@@ -159,11 +154,13 @@ def cli():
 
     A complete workspace and history manager for developers.
     """
-    pass
+    # MOVED: Only check/create folder when CLI actually runs, not on import
+    if not GLOBAL_CWM_BANK.exists():
+        safe_create_cwm_folder(GLOBAL_CWM_BANK)
 
 # --- BUILT-IN COMMANDS ---
 
-@cli.command()
+@cli.command(cls=RichHelpCommand)
 def init():
     """Initializes a .cwm folder in the current directory."""
     current_path = Path.cwd()
@@ -188,19 +185,7 @@ def init():
     else:
         click.echo("CWM initialization failed.")
 
-def ensure_global_folder():
-    """Ensure global fallback folder exists with safety checks."""
-    if not GLOBAL_CWM_BANK.exists():
-        click.echo("Creating global CWM bank...")
-        success = safe_create_cwm_folder(GLOBAL_CWM_BANK)
-        if success:
-            click.echo(f"Global CWM bank initialized at:\n{GLOBAL_CWM_BANK}")
-        else:
-            click.echo("ERROR: Could not create global CWM bank.")
-
-ensure_global_folder()
-
-@click.command()
+@cli.command(cls=RichHelpCommand)
 def hello():
     """System diagnostics."""
     click.echo(f"CWM v{__version__}")

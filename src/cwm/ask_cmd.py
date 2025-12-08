@@ -24,6 +24,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from .storage_manager import StorageManager
 from .utils import DEFAULT_AI_INSTRUCTION
+from .rich_help import RichHelpGroup,RichHelpCommand
 
 # ------------------------------------------------------
 # GLOBAL STATE
@@ -368,12 +369,26 @@ class ChatSession:
                 try:
                     out = self.provider.generate(convo)
                 except Exception as e:
-                    if "429" in str(e):
-                        self.ui.console.print("\n[bold yellow]⚠ Rate limit (429).[/bold yellow]")
-                    if "400" in str(e):
-                        self.ui.console.print("\n[bold yellow]⚠ Invalid API Key (400).[/bold yellow]")
+                    err_msg = str(e)
+
+                    # 1. Handle Rate Limit / Resource Exhausted (429)
+                    if "429" in err_msg or "ResourceExhausted" in err_msg:
+                        # Try to extract 'retryDelay': '31s' using Regex
+                        # Matches: 'retryDelay': '  (capture digits+s)  '
+                        match = re.search(r"'retryDelay':\s*'([^']+)'", err_msg)
+                        
+                        wait_time = match.group(1) if match else "a few seconds"
+                        
+                        self.ui.console.print(f"\n[bold yellow]⚠ Resource exhausted. Retry after {wait_time}.[/bold yellow]")
+
+                    # 2. Handle Invalid API Key / Bad Request (400)
+                    elif "400" in err_msg or "InvalidArgument" in err_msg:
+                        self.ui.console.print("\n[bold yellow]⚠ Invalid API Key or Request (400).[/bold yellow]")
+
+                    # 3. Handle all other unknown errors
                     else:
-                        self.ui.print_error(str(e))
+                        self.ui.print_error(err_msg)
+
                     continue
 
             out = self._clean_response(out)
@@ -423,7 +438,7 @@ def _resolve_instruction(manager):
 def launch_chat(provider_class, model_key, single_prompt):
     ui = UI()
     manager = StorageManager()
-    config = manager.get_config()
+    config = manager.get_config("global")
     
     # Theme
     theme = config.get("code_theme", "monokai")
@@ -468,22 +483,22 @@ def launch_chat(provider_class, model_key, single_prompt):
 # ------------------------------------------------------
 # COMMAND GROUP
 # ------------------------------------------------------
-@click.group("ask")
+@click.group("ask",cls=RichHelpGroup)
 def ask_cmd():
     """AI Chat Assistant."""
     pass
 
-@ask_cmd.command("gemini")
+@ask_cmd.command("gemini",help="launch gemini",cls=RichHelpCommand)
 @click.option("-s", "--single", help="One-off prompt (non-interactive).")
 def chat_gemini(single):
     launch_chat(GeminiProvider, "gemini", single)
 
-@ask_cmd.command("openai")
+@ask_cmd.command("openai",help="launch openai",cls=RichHelpCommand)
 @click.option("-s", "--single", help="One-off prompt (non-interactive).")
 def chat_openai(single):
     launch_chat(OpenAIProvider, "openai", single)
 
-@ask_cmd.command("local")
+@ask_cmd.command("local",help="launch local model",cls =RichHelpCommand)
 @click.option("-s", "--single", help="One-off prompt (non-interactive).")
 def chat_local(single):
     launch_chat(LocalProvider, "local_ai", single)

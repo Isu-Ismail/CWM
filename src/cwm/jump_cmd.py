@@ -7,6 +7,13 @@ import shutil
 import shlex
 from .storage_manager import StorageManager
 from difflib import get_close_matches
+from rich.console import Console
+from rich.table import Table
+from rich.prompt import Prompt
+from .rich_help import RichHelpCommand
+
+console = Console()
+
 
 def _launch_editor(path: str, manager: StorageManager):
     """Smart Launcher: Console apps -> New Window, GUI apps -> Detached."""
@@ -103,28 +110,33 @@ def _resolve_project(token: str, projects: list):
         return next((p for p in projects if p["alias"] == matches[0]), None)
     return None
 
-# --- COMMAND ---
 
-@click.command("jump")
+
+
+
+
+@click.command("jump", cls=RichHelpCommand)
 @click.argument("names", required=False)
 @click.option("-t", "--terminal", is_flag=True, help="Also open a new terminal window.")
 @click.option("-l", "--list", "list_mode", is_flag=True, help="Force list mode.")
-@click.option("-n", "count", default="10", help="Number of projects to show (or 'all'). Default: 10.")
+@click.option("-n", "count", default="10", help="Number of projects to show (or 'all').")
 def jump_cmd(names, terminal, list_mode, count):
     """
-    Jump to a project.
+    Jump to a project (Launch Editor + Terminal).
     """
     manager = StorageManager()
     data = manager.load_projects()
     projects = data.get("projects", [])
 
     if not projects:
-        click.echo("No projects found. Run 'cwm project scan' first.")
+        console.print("\n  [yellow]! No projects found. Run 'cwm project scan' first.[/yellow]\n")
         return
 
     raw_input = ""
 
+    # --- 1. LIST MODE (Table View) ---
     if list_mode or not names:
+        # Sort: Highest hits first, then alphabetical
         sorted_projs = sorted(projects, key=lambda x: (-x.get("hits", 0), x["alias"]))
         
         limit = 10
@@ -142,52 +154,83 @@ def jump_cmd(names, terminal, list_mode, count):
         
         display_list = sorted_projs[:limit]
         
+        console.print("") # Spacing
+        
+        # Determine Title
         if is_all or limit >= len(projects):
-            header = f"--- All Projects ({len(projects)}) ---"
+            title = f"All Projects ({len(projects)})"
         else:
-            header = f"--- Top {len(display_list)} Projects (Sorted by Hits) ---"
+            title = f"Top {len(display_list)} Projects [dim](Sorted by Hits)[/dim]"
 
-        click.echo(header)
+        # Create Clean Table
+        table = Table(title=title, title_justify="left", box=None, padding=(0, 2), show_lines=False)
+        table.add_column("ID", justify="right", style="green")
+        table.add_column("Hits", justify="right", style="yellow")
+        table.add_column("Alias", style="bold cyan")
+        table.add_column("Path", style="dim white")
 
-#shows larger hits first 
         for p in display_list:
-            hits = p.get('hits', 0)
-            pid = p['id']
-            alias = p['alias']
-            path = p['path']
-            
-           
-            click.echo(f" [{pid}] (Hits: {hits})  {alias:<25} : {path}")
+            table.add_row(
+                str(p['id']), 
+                str(p.get('hits', 0)), 
+                p['alias'], 
+                str(p['path'])
+            )
+        
+        console.print(table)
         
         remaining = len(projects) - len(display_list)
         if remaining > 0:
-            click.echo(f"...and {remaining} more. (Run 'cwm jump -n all' to see everything)")
+            console.print(f"\n  [dim]...and {remaining} more. (Run 'cwm jump -n all' to see everything)[/dim]")
 
-        raw_input = click.prompt("Select IDs/Aliases (comma-separated)", default="", show_default=False)
+        console.print("")
+        raw_input = Prompt.ask("  [bold cyan]?[/bold cyan] Select IDs/Aliases [dim](comma-separated)[/dim]", default="")
     else:
         raw_input = names
 
-    if not raw_input: return
+    if not raw_input: 
+        return
 
+    # --- 2. RESOLVE TARGETS ---
     tokens = raw_input.split(',')
     valid_targets = []
 
     for token in tokens:
-        target = _resolve_project(token, projects)
+        target = _resolve_project(token.strip(), projects)
         if target:
             if target not in valid_targets:
                 valid_targets.append(target)
 
     if not valid_targets:
-        click.echo("No valid projects found.")
+        console.print("\n  [red]✖ No valid projects found.[/red]\n")
         return
 
-    click.echo(f"Launching {len(valid_targets)} project(s)...")
+    # --- 3. LAUNCH LOOP (Modern Style) ---
+    console.print("") # Spacing
     
     for target in valid_targets:
+        # Update Hits
         target["hits"] = target.get("hits", 0) + 1
-        _launch_editor(target["path"], manager)
+        
+        alias = target['alias']
+        path = target['path']
+        
+        # STYLE: Matches your screenshot
+        # ✔ Found project: my-backend-api
+        # @ ~/dev/work/my-backend-api
+        console.print(f"  [bold green]✔ Found project:[/bold green] [bold blue]{alias}[/bold blue]")
+        console.print(f"  [dim]@[/dim] [dim]{path}[/dim]")
+        console.print("")
+        
+        # i Launching VS Code...
+        console.print(f"  [bold cyan]i[/bold cyan] Launching Editor...")
+        _launch_editor(path, manager)
+        
         if terminal:
-            _launch_terminal(target["path"])
+            console.print(f"  [bold cyan]i[/bold cyan] Launching Terminal...")
+            _launch_terminal(path)
 
+        console.print("  [dim]Done.[/dim]\n")
+
+    # Save hits
     manager.save_projects(data)

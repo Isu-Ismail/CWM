@@ -4,6 +4,7 @@ import pyperclip
 import re
 from pathlib import Path
 from .file_mapper import FileMapper
+from .rich_help import RichHelpCommand,RichHelpGroup
 
 # --- CONDENSER LOGIC (Unchanged) ---
 def _remove_c_comments(text):
@@ -58,7 +59,7 @@ def _read_file_safe(path: Path, condense: bool) -> str:
         return f"# [Error reading {path.name}: {e}]\n"
 
 # --- COMMAND ---
-@click.command("copy")
+@click.command("copy",cls=RichHelpCommand)
 @click.option("--init", is_flag=True, help="Initialize .cwmignore.")
 @click.option("--tree", is_flag=True, help="Generate and copy the CLEAN file tree (no IDs).")
 @click.option("-f", "filter_str", help="Filter the file tree display.")
