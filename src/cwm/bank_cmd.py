@@ -1,49 +1,37 @@
 import click
-import shutil
-from pathlib import Path
-
-# Rich Imports
 from rich.console import Console
 from rich.prompt import Confirm
-from rich.text import Text
-
 from .storage_manager import StorageManager, GLOBAL_CWM_BANK
-from .rich_help import RichHelpCommand
+from .rich_help import RichHelpGroup,RichHelpCommand
 
-# Initialize Console
 console = Console()
 
-@click.group("bank")
+@click.group("bank",cls=RichHelpGroup)
 def bank_cmd():
     """Manage CWM bank locations."""
     pass
 
-@bank_cmd.command("info")
+@bank_cmd.command("info",cls=RichHelpCommand)
 def info():
     """Show the location of Local and Global banks."""
     manager = StorageManager()
     
-    # Identify Banks
     current_path = manager.get_bank_path()
     is_local_active = (current_path != GLOBAL_CWM_BANK)
     
     console.print("") # Spacing
 
-    # Display Global
     console.print(f"  [bold cyan]Global Bank:[/bold cyan]  {GLOBAL_CWM_BANK}")
     
-    # Display Local
     if is_local_active:
         console.print(f"  [bold magenta]Local Bank:[/bold magenta]   {current_path}  [bold green](Active)[/bold green]")
     else:
-        # If no local bank, just show that Global is active implicitly or explicitly
-        # Keeping it minimal as requested:
         pass
     
     console.print("")
 
 
-@bank_cmd.command("delete")
+@bank_cmd.command("delete",cls=RichHelpCommand)
 @click.option("--local", is_flag=True, help="Delete the LOCAL bank in this folder.")
 @click.option("--global", "global_flag", is_flag=True, help="Delete the GLOBAL bank.")
 def delete_bank(local, global_flag):
@@ -79,13 +67,14 @@ def delete_bank(local, global_flag):
         console.print(f"[yellow]! {bank_type} bank does not exist at:[/yellow] {target_path}")
         return
 
-    # Minimal Warning
+   
     console.print(f"\n  [bold red]⚠ WARNING:[/bold red] You are about to DELETE the [bold]{bank_type}[/bold] bank.")
     console.print(f"  [dim]Location: {target_path}[/dim]")
     console.print("  [dim]This action cannot be undone.[/dim]\n")
     
     if Confirm.ask(f"  [bold red]Are you sure you want to delete it?[/bold red]"):
         try:
+            import shutil
             shutil.rmtree(target_path)
             console.print(f"\n  [bold green]✔ Deleted {bank_type} bank.[/bold green]\n")
         except Exception as e:

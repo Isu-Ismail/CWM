@@ -5,12 +5,11 @@ from pathlib import Path
 import click
 from typing import Tuple
 import re
-import shutil   
+
 
 CWM_BANK_NAME = ".cwm"
-# INSTRUCTION_FILE = "instruction.txt"  #
 
-DEFAULT_AI_INSTRUCTION="""You are DevBot, a senior developer's assistant. Follow these rules:
+DEFAULT_AI_INSTRUCTION = """You are DevBot, a senior developer's assistant. Follow these rules:
 *if user aks hello reply hello how can i help you today like this polite and simple.
 *Keep responses short, precise, and actionable.
 * Use bullet points or numbered steps for instructions.
@@ -28,59 +27,49 @@ DEFAULT_AI_INSTRUCTION="""You are DevBot, a senior developer's assistant. Follow
 * Keep output token usage low while keeping enough detail to understand.
 """
 
-# Master Defaults (Used by StorageManager for fallbacks)
 DEFAULT_CONFIG = {}
 
 FILE_ATTRIBUTE_HIDDEN = 0x02
 
 
-
 def looks_invalid_command(cmd: str) -> bool:
     cmd = cmd.strip()
 
-    # 1. Empty or whitespace
     if not cmd:
         return True
 
-    # 2. Non printable chars
     if not cmd.isascii() or any(ord(c) < 32 for c in cmd):
         return True
 
-    # 3. Must contain at least one letter or number
     if not re.search(r"[A-Za-z0-9]", cmd):
         return True
 
-    # 4. Unmatched quotes
     if cmd.count('"') % 2 != 0:
         return True
     if cmd.count("'") % 2 != 0:
         return True
 
-    # 5. Starts with invalid pipe/redirect
     if cmd.startswith("|") or cmd.startswith(">") or cmd.startswith("<") or cmd.startswith("#"):
         return True
     if cmd.isdigit():
         return True
 
-    # 6. Multiple pipe misuse
     if "|| |" in cmd or "||| " in cmd:
         return True
 
-    # 7. Only symbols (no words)
     if re.fullmatch(r"[\W_]+", cmd):
         return True
 
-    # 8. Broken redirect syntax
     if re.search(r"[><]{3,}", cmd):  # like >>>>> or <<<
         return True
 
     return False
 
 
-
 def _ensure_dir(path: Path):
     if not path.exists():
         path.mkdir(parents=True, exist_ok=True)
+
 
 def make_hidden(path: Path):
     """
@@ -90,11 +79,11 @@ def make_hidden(path: Path):
     if os.name == 'nt':
         try:
             import ctypes
-            # Convert Path to string and set attribute
-            # This hides the folder from standard Explorer views
-            ret = ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_HIDDEN)
+            ret = ctypes.windll.kernel32.SetFileAttributesW(
+                str(path), FILE_ATTRIBUTE_HIDDEN)
         except Exception:
             pass
+
 
 def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
     """
@@ -102,39 +91,37 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
     Works for both Global (AppData) and Local (.cwm) banks.
     """
     try:
-        # 1. Create the main folder
         _ensure_dir(folder_path)
-        
-        # 2. FORCE HIDE IT (Applies to both Global and Local)
+
         make_hidden(folder_path)
 
         data_path = folder_path / "data"
         backup_path = data_path / "backup"
-        
+
         _ensure_dir(data_path)
         _ensure_dir(backup_path)
 
         required_files = {
             "saved_cmds.json": {"last_saved_id": 0, "commands": []},
-            # "fav_cmds.json": [],
             "history.json": {"last_sync_id": 0, "commands": []},
         }
 
         config_file = folder_path / "config.json"
         if not config_file.exists():
             config_file.write_text("{}")
-        
+
         for fname, default_value in required_files.items():
             file = data_path / fname
             if not file.exists():
                 file.write_text(json.dumps(default_value, indent=2))
                 if repair:
                     click.echo(f"{fname} missing... recreated.")
-        
+
         return True
     except Exception as e:
         click.echo(f"Error creating CWM folder: {e}", err=True)
         return False
+
 
 def has_write_permission(path: Path) -> bool:
     try:
@@ -145,9 +132,11 @@ def has_write_permission(path: Path) -> bool:
     except:
         return False
 
+
 def is_path_literally_inside_bank(path: Path) -> bool:
     current = path.resolve()
     return CWM_BANK_NAME in current.parts
+
 
 def find_nearest_bank_path(start_path: Path) -> Path | None:
     current = start_path.resolve()
@@ -157,8 +146,6 @@ def find_nearest_bank_path(start_path: Path) -> Path | None:
             return candidate
     return None
 
-# --- HISTORY HELPERS ---
-
 
 def get_all_history_candidates() -> list[Path]:
     """Returns a list of all valid history files found on the system."""
@@ -166,28 +153,29 @@ def get_all_history_candidates() -> list[Path]:
     home = Path.home()
     candidates = []
 
-    # --- Windows Candidates ---
     if system == "Windows":
         appdata = os.getenv("APPDATA")
         if appdata:
-            candidates.append(Path(appdata) / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
-        candidates.append(home / "AppData" / "Roaming" / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
-        candidates.append(home / ".bash_history") # Git Bash
+            candidates.append(Path(appdata) / "Microsoft" / "Windows" /
+                              "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
+        candidates.append(home / "AppData" / "Roaming" / "Microsoft" /
+                          "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
+        candidates.append(home / ".bash_history")  # Git Bash
 
-    # --- Linux/Mac Candidates ---
     candidates.append(home / ".bash_history")
     candidates.append(home / ".zsh_history")
-    candidates.append(home / ".local" / "share" / "powershell" / "PSReadLine" / "ConsoleHost_history.txt")
-    
-    # Filter for existence
+    candidates.append(home / ".local" / "share" / "powershell" /
+                      "PSReadLine" / "ConsoleHost_history.txt")
+
     existing_files = []
     seen = set()
     for p in candidates:
         if p.exists() and str(p) not in seen:
             existing_files.append(p)
             seen.add(str(p))
-            
+
     return existing_files
+
 
 def _read_config_for_history(bank_path: Path) -> Path | None:
     """Helper to read history_file from a specific bank's config."""
@@ -204,6 +192,7 @@ def _read_config_for_history(bank_path: Path) -> Path | None:
         pass
     return None
 
+
 def get_history_file_path() -> Path | None:
     """
     Finds the active history file.
@@ -212,43 +201,41 @@ def get_history_file_path() -> Path | None:
     2. Config in Global Bank (The Fix!)
     3. Auto-Detection (OS/Shell)
     """
-    
-    # 1. Check Local Bank Config
+
     local_bank = find_nearest_bank_path(Path.cwd())
     if local_bank:
         override = _read_config_for_history(local_bank)
-        if override: return override
+        if override:
+            return override
 
-    # 2. Check Global Bank Config (FIX)
     global_bank = Path(click.get_app_dir("cwm"))
     if global_bank.exists():
         override = _read_config_for_history(global_bank)
-        if override: return override
+        if override:
+            return override
 
-    # 3. Auto-Detection (Fallback)
     system = platform.system()
     home = Path.home()
     candidates = []
 
     if system == "Windows":
-        # Check for Git Bash environment variable
-        is_git_bash = "MSYSTEM" in os.environ or "bash" in os.environ.get("SHELL", "").lower()
-        
+        is_git_bash = "MSYSTEM" in os.environ or "bash" in os.environ.get(
+            "SHELL", "").lower()
+
         if is_git_bash:
             candidates.append(home / ".bash_history")
-        
-        # PowerShell
+
         appdata = os.getenv("APPDATA")
         if appdata:
-            candidates.append(Path(appdata) / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
-        candidates.append(home / "AppData" / "Roaming" / "Microsoft" / "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
-        
-        # Fallback Bash
+            candidates.append(Path(appdata) / "Microsoft" / "Windows" /
+                              "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
+        candidates.append(home / "AppData" / "Roaming" / "Microsoft" /
+                          "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
+
         if not is_git_bash:
             candidates.append(home / ".bash_history")
 
     else:
-        # Linux/Mac Logic
         shell = os.environ.get("SHELL", "")
         if "zsh" in shell:
             candidates.append(home / ".zsh_history")
@@ -256,13 +243,15 @@ def get_history_file_path() -> Path | None:
         else:
             candidates.append(home / ".bash_history")
             candidates.append(home / ".zsh_history")
-        candidates.append(home / ".local" / "share" / "powershell" / "PSReadLine" / "ConsoleHost_history.txt")
+        candidates.append(home / ".local" / "share" / "powershell" /
+                          "PSReadLine" / "ConsoleHost_history.txt")
 
     for path in candidates:
         if path.exists():
             return path
-            
+
     return None
+
 
 def tail_read_last_n_lines(path, n, chunk_size=4096):
     """
@@ -292,13 +281,10 @@ def tail_read_last_n_lines(path, n, chunk_size=4096):
 
             lines_found += chunk.count(b"\n")
 
-        # Now decode normally (no reverse needed)
         text = data.decode("utf-8", errors="ignore")
         lines = text.splitlines()
 
-        # Return the last N lines (correct order)
         return lines[-n:]
-
 
 
 def read_powershell_history() -> Tuple[list[str], int]:
@@ -314,16 +300,13 @@ def read_powershell_history() -> Tuple[list[str], int]:
     if not path or not path.exists():
         return [], 0
 
-    # --- Read last ~5000 lines using tail (fast!) ---
     lines = tail_read_last_n_lines(path, 5000)
 
-    # --- Count full file length without loading the file ---
     try:
         total_count = sum(1 for _ in open(path, 'rb'))
     except:
         total_count = len(lines)
 
-    # Strip and return
     cleaned = [ln.rstrip("\n") for ln in lines if ln.strip()]
     return cleaned, total_count
 
@@ -332,17 +315,16 @@ def is_cwm_call(s: str) -> bool:
     s = s.strip()
     return s.startswith("cwm ") or s == "cwm"
 
-# --- Sync Check for Linux ---
+
 def is_history_sync_enabled() -> bool:
     """Checks if the shell is configured to sync history instantly."""
     if os.name == 'nt':
-        return True # Windows (PowerShell) handles this by default
-        
+        return True  # Windows (PowerShell) handles this by default
+
     home = Path.home()
     bashrc = home / ".bashrc"
     zshrc = home / ".zshrc"
-    
-    # Check bashrc
+
     if bashrc.exists():
         try:
             content = bashrc.read_text(encoding="utf-8", errors="ignore")
@@ -351,7 +333,6 @@ def is_history_sync_enabled() -> bool:
         except:
             pass
 
-    # Check zshrc (simple check)
     if zshrc.exists():
         try:
             content = zshrc.read_text(encoding="utf-8", errors="ignore")
@@ -359,26 +340,25 @@ def is_history_sync_enabled() -> bool:
                 return True
         except:
             pass
-            
+
     return False
 
-# --- NEW: Get History Line Count (Optimized) ---
+
 def get_history_line_count() -> int:
     """Fast check of history file length."""
     path = get_history_file_path()
     if not path or not path.exists():
         return 0
     try:
-        # Quick line count without loading entire file into memory
         return sum(1 for _ in open(path, 'rb'))
     except:
         return 0
 
-# --- NEW: Get Clear History Command ---
+
 def get_clear_history_command() -> str:
     """Returns the command to clear history based on the active shell."""
     path = get_history_file_path()
-    
+
     if not path:
         if os.name == 'nt':
             return "Clear-Content (Get-PSReadlineOption).HistorySavePath"
@@ -390,3 +370,5 @@ def get_clear_history_command() -> str:
         return f"cat /dev/null > {path}; fc -p {path}"
     else:
         return f"cat /dev/null > {path} && history -c"
+
+

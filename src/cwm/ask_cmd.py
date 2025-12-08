@@ -1,6 +1,5 @@
 # src/cwm/ask_cmd.py
 import os
-import sys
 import re
 import shlex
 import socket
@@ -21,31 +20,17 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.styles import Style
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.patch_stdout import patch_stdout 
-
 from .storage_manager import StorageManager
 from .utils import DEFAULT_AI_INSTRUCTION
 from .rich_help import RichHelpGroup,RichHelpCommand
 
-# ------------------------------------------------------
-# GLOBAL STATE
-# ------------------------------------------------------
 CURRENT_CODE_THEME = "monokai"
 
-# ------------------------------------------------------
-# UI HELPER & PATCHES
-# ------------------------------------------------------
-# In src/cwm/ask_cmd.py
-
 def _patched_code_block_console(self, console, options):
-    # 1. Get the raw code that rich found
     code = str(self.text)
     
-    # 2. AUTOMATIC CLEANUP:
-    # Expand tabs to spaces to prevent alignment errors
     code = code.expandtabs(4)
-    # Remove common indentation (fixes the "nested code" problem)
     code = textwrap.dedent(code)
-    # Strip leading/trailing newlines for a clean look
     code = code.strip()
 
     lexer_name = self.lexer_name if self.lexer_name != "default" else "python"
@@ -59,7 +44,6 @@ def _patched_code_block_console(self, console, options):
     )
     yield syntax
 
-# Apply the patch
 CodeBlock.__rich_console__ = _patched_code_block_console
 
 
@@ -83,13 +67,9 @@ class UI:
         self.console = Console(theme=Theme(theme_style))
 
     def _flatten_code_blocks(self, text):
-        # FIX: Ensure code blocks always start/end on their own lines
-        # (Rich's parser requires this to detect them correctly)
         
-        # 1. Add newline before opening ``` if needed
         text = re.sub(r"([^\n])\s*(```)", r"\1\n\2", text)
         
-        # 2. Add newline after opening ```(lang) if needed
         text = re.sub(r"(```[a-zA-Z0-9]*)\s+([^\n])", r"\1\n\2", text)
         
         return text
@@ -115,9 +95,6 @@ class UI:
         except OSError:
             return False
 
-# ------------------------------------------------------
-# PROVIDERS
-# ------------------------------------------------------
 class BaseProvider(ABC):
     def __init__(self, model_name, system_instruction, api_key=None):
         self.model_name = model_name
@@ -184,9 +161,6 @@ class LocalProvider(BaseProvider):
         except Exception as e:
             return f"Local model error: {e}"
 
-# ------------------------------------------------------
-# CHAT SESSION (Command Logic)
-# ------------------------------------------------------
 class CommandLexer(Lexer):
     def lex_document(self, document):
         text = document.text
@@ -260,7 +234,6 @@ class ChatSession:
         out = self._clean_response(out)
         self.ui.print_bot_response(out, self.code_theme, self.response_counter)
         
-        # Auto-copy single result code
         code = self._extract_clean_code(out)
         if code:
             try:
@@ -292,7 +265,6 @@ class ChatSession:
                 os.system('cls' if os.name == 'nt' else 'clear')
                 continue
 
-            # --- Commands ---
             if prompt == "/help":
                 self.ui.print_info("Available Commands:")
                 self.ui.console.print("  [bold]/help[/bold]           : Show this help message")
@@ -371,21 +343,16 @@ class ChatSession:
                 except Exception as e:
                     err_msg = str(e)
 
-                    # 1. Handle Rate Limit / Resource Exhausted (429)
                     if "429" in err_msg or "ResourceExhausted" in err_msg:
-                        # Try to extract 'retryDelay': '31s' using Regex
-                        # Matches: 'retryDelay': '  (capture digits+s)  '
                         match = re.search(r"'retryDelay':\s*'([^']+)'", err_msg)
                         
                         wait_time = match.group(1) if match else "a few seconds"
                         
                         self.ui.console.print(f"\n[bold yellow]⚠ Resource exhausted. Retry after {wait_time}.[/bold yellow]")
 
-                    # 2. Handle Invalid API Key / Bad Request (400)
                     elif "400" in err_msg or "InvalidArgument" in err_msg:
                         self.ui.console.print("\n[bold yellow]⚠ Invalid API Key or Request (400).[/bold yellow]")
 
-                    # 3. Handle all other unknown errors
                     else:
                         self.ui.print_error(err_msg)
 
@@ -396,9 +363,7 @@ class ChatSession:
             self.response_code_history[self.response_counter] = self._extract_clean_code(out)
             self.ui.print_bot_response(out, self.code_theme, self.response_counter)
 
-# ------------------------------------------------------
-# LAUNCHER UTILS
-# ------------------------------------------------------
+
 def _resolve_instruction(manager):
     """
     Priority for resolving the instruction:
@@ -420,17 +385,14 @@ def _resolve_instruction(manager):
     ai_instruction_config_value = config.get("ai_instruction")
 
     if ai_instruction_config_value:
-        # We don't strip quotes here because the saver cleaned them
         config_path = Path(ai_instruction_config_value)
         
-        # If it is a valid file, read its content
         if config_path.is_file():
             try:
                 return config_path.read_text(encoding="utf-8").strip()
             except Exception:
                 pass 
         
-        # If not a file (or read failed), return the string itself
         return ai_instruction_config_value
     
     return DEFAULT_AI_INSTRUCTION
@@ -440,13 +402,10 @@ def launch_chat(provider_class, model_key, single_prompt):
     manager = StorageManager()
     config = manager.get_config("global")
     
-    # Theme
     theme = config.get("code_theme", "monokai")
     
-    # Instruction
     instruction = _resolve_instruction(manager)
     
-    # Model & Key
     model_conf = config.get(model_key, {})
     model_name = model_conf.get("model")
     api_key = model_conf.get("key")
@@ -455,15 +414,12 @@ def launch_chat(provider_class, model_key, single_prompt):
         ui.print_error(f"No model configured for {model_key}. Run 'cwm config --{model_key}'")
         return
 
-    # Local specific check
     if model_key == "local_ai":
-        # Check if ollama is running/installed
         if shutil.which("ollama") is None:
             ui.print_error("Ollama not found. Install it from ollama.com")
             return
 
     try:
-        # Inject Key if needed
         if model_key == "local_ai":
             provider = provider_class(model_name, instruction)
         else:
@@ -480,9 +436,6 @@ def launch_chat(provider_class, model_key, single_prompt):
     else:
         session.run_interactive()
 
-# ------------------------------------------------------
-# COMMAND GROUP
-# ------------------------------------------------------
 @click.group("ask",cls=RichHelpGroup)
 def ask_cmd():
     """AI Chat Assistant."""

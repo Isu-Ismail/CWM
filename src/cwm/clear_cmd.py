@@ -1,10 +1,9 @@
 import click
 from pathlib import Path
-from .storage_manager import StorageManager, find_nearest_bank_path
+from .storage_manager import StorageManager
+from .rich_help import RichHelpCommand
 
-# =====================================================================================
-# CORE CLEANING LOGIC (Unchanged)
-# =====================================================================================
+
 def _clean_file_logic(target_path: Path, filter_str: str | None, remove_invalid: bool):
     """
     Clean history file (System or Local) and save to 'filename_cleaned.txt'.
@@ -59,7 +58,6 @@ def _clean_file_logic(target_path: Path, filter_str: str | None, remove_invalid:
             continue
         final_list.append(cmd)
 
-    # Save to intermediate "_cleaned" file
     out_file = target_path.parent / f"{target_path.stem}_cleaned{target_path.suffix}"
     out_file.write_text("\n".join(final_list), encoding="utf-8")
 
@@ -69,9 +67,6 @@ def _clean_file_logic(target_path: Path, filter_str: str | None, remove_invalid:
     click.echo("Run with --apply to overwrite the actual history file.")
 
 
-# =====================================================================================
-# APPLY & UNDO (Refactored to use StorageManager)
-# =====================================================================================
 def _apply_cleaned_file(path: Path):
     """
     Backs up original -> Overwrites with cleaned version.
@@ -84,16 +79,12 @@ def _apply_cleaned_file(path: Path):
 
     manager = StorageManager()
     
-    # 1. Create Standard Backup (.bak) using Manager
-    # We access the internal method or you can make it public
     manager._update_backup(path) 
     click.echo(f"Backup updated: {path.name}.bak")
 
-    # 2. Overwrite Original
     clean_text = cleaned_path.read_text(encoding="utf-8", errors="ignore")
     path.write_text(clean_text, encoding="utf-8")
     
-    # 3. Cleanup
     cleaned_path.unlink() # Delete the temp _cleaned file
 
     click.echo(f"✔ File {path.name} successfully updated!")
@@ -105,21 +96,14 @@ def _undo_cleaning(path: Path):
     """
     manager = StorageManager()
     
-    # Uses the standard restoration logic
-    # This will look for {path}.bak in the same folder
     restored_data = manager._restore_from_backup(path, default="")
     
-    # Since _restore_from_backup handles the writing for us, we are done!
-    # (Just verifying it actually restored content)
     if restored_data:
          click.echo(f"✔ Successfully undid changes to {path.name}")
     else:
          click.echo(f"⚠ Undo failed or no backup found for {path.name}")
 
 
-# =====================================================================================
-# LOCAL HISTORY HELPER
-# =====================================================================================
 def _get_local_history_file() -> Path | None:
     manager = StorageManager()
     root = manager.find_project_root()
@@ -141,14 +125,12 @@ def _perform_clear(data_obj: dict, list_key: str, id_key: str,
         data_obj[id_key] = 0
         return initial_count
 
-    # Logic for -n (slice)
     if count > 0:
         if count >= len(commands):
             commands = []
         else:
             commands = commands[count:]
     
-    # Logic for -f (filter)
     final_list = []
     for cmd in commands:
         cmd_str = cmd.get("cmd", "")
@@ -161,7 +143,6 @@ def _perform_clear(data_obj: dict, list_key: str, id_key: str,
         if not should_delete:
             final_list.append(cmd)
             
-    # Re-index
     for i, cmd in enumerate(final_list):
         cmd["id"] = i + 1
         
@@ -170,10 +151,7 @@ def _perform_clear(data_obj: dict, list_key: str, id_key: str,
     
     return initial_count - len(final_list)
 
-# =====================================================================================
-# MAIN COMMAND
-# =====================================================================================
-@click.command("clear")
+@click.command("clear",cls=RichHelpCommand)
 @click.option("--saved", is_flag=True, help="Clear saved commands.")
 @click.option("--hist", is_flag=True, help="Clear cached history.")
 @click.option("--sys-hist", is_flag=True, help="Clean the system shell history.")
@@ -190,7 +168,6 @@ def clear_cmd(saved, hist, sys_hist, loc_hist, count, filter_str, all_flag, remo
     """
     manager = StorageManager()
 
-    # --- 1. System History ---
     if sys_hist:
         from .utils import get_history_file_path
         path = get_history_file_path()
@@ -205,7 +182,6 @@ def clear_cmd(saved, hist, sys_hist, loc_hist, count, filter_str, all_flag, remo
             _apply_cleaned_file(path)
         return
 
-    # --- 2. Local History ---
     if loc_hist:
         path = _get_local_history_file()
         if not path: return
@@ -219,7 +195,6 @@ def clear_cmd(saved, hist, sys_hist, loc_hist, count, filter_str, all_flag, remo
             _apply_cleaned_file(path)
         return
 
-    # --- 3. JSON Data Cleaning (Saved/Cached) ---
     if not saved and not hist:
         raise click.UsageError("Must specify target: --saved, --hist, --sys-hist, or --loc-hist")
     

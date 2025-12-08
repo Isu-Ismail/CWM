@@ -1,25 +1,26 @@
-import copy
 
 """
 Unified JSON Validator System for CWM
 """
 
-# -------------------------------------
-# Default Value Helpers (Unchanged)
-# -------------------------------------
+
 def default_for_type(t):
-    if t is int: return 0
-    if t is float: return 0.0
-    if t is str: return ""
-    if t is bool: return False
-    if t is list: return []
-    if t is dict: return {}
-    if isinstance(t, tuple): return None
+    if t is int:
+        return 0
+    if t is float:
+        return 0.0
+    if t is str:
+        return ""
+    if t is bool:
+        return False
+    if t is list:
+        return []
+    if t is dict:
+        return {}
+    if isinstance(t, tuple):
+        return None
     return None
 
-# -------------------------------------
-# Core Validators (Updated for Partial Mode)
-# -------------------------------------
 
 def _validate_value(value, expected):
     """Validate a primitive value."""
@@ -44,7 +45,6 @@ def _validate_list(data, subschema, partial=False):
     item_schema = subschema[0]
     validated = []
     for item in data:
-        # Pass the partial flag recursively
         validated.append(validate(item, item_schema, partial=partial))
     return validated
 
@@ -52,7 +52,7 @@ def _validate_list(data, subschema, partial=False):
 def _validate_dict(data, schema, partial=False):
     """
     Validate a dictionary.
-    
+
     modes:
     - partial=False (Strict): Result starts empty. Only Schema keys are added. Missing keys generated.
     - partial=True (Loose): Result starts as copy of Data. Unknown keys preserved. Missing keys ignored.
@@ -60,23 +60,16 @@ def _validate_dict(data, schema, partial=False):
     if not isinstance(data, dict):
         return {}
 
-    # 1. Setup Result Strategy
     if partial:
-        # Start with all existing data (preserves extra/custom keys)
         result = data.copy()
     else:
-        # Start empty (removes extra/unknown keys)
         result = {}
 
-    # 2. Iterate Schema Definitions
     for key, subschema in schema.items():
         if key in data:
-            # Field is present: Validate its type (recurse)
             result[key] = validate(data[key], subschema, partial=partial)
         elif not partial:
-            # Field is missing AND Strict Mode: Generate default
             result[key] = generate_default(subschema)
-        # else: Field is missing AND Partial Mode: Do nothing (leave it missing)
 
     return result
 
@@ -109,7 +102,7 @@ def validate_service_entry(entry):
         "project_id": int,
         "alias": str,
         "pid": (int, type(None)),
-        "viewers": [int],   
+        "viewers": [int],
         "status": str,
         "start_time": (int, float),
         "log_path": str,
@@ -117,10 +110,6 @@ def validate_service_entry(entry):
     }
     return validate(entry, template)
 
-
-# -------------------------------------
-# MASTER SCHEMA REGISTRY
-# -------------------------------------
 
 SCHEMAS = {
     "projects.json": {
@@ -140,8 +129,6 @@ SCHEMAS = {
             {
                 "id": int,
                 "alias": str,
-                # Added project_ids so it doesn't get stripped in strict mode
-                "project_ids": [int], 
                 "project_list": [
                     {
                         "id": int,
@@ -185,7 +172,7 @@ SCHEMAS = {
         "isWatching": bool,
         "shell": str,
         "hook_file": str,
-        "started_at": (str, int), # Fixed syntax from 'str or int'
+        "started_at": (str, int),  # Fixed syntax from 'str or int'
     },
 
     "config.json": {
@@ -209,6 +196,8 @@ SCHEMAS = {
 
         "ai_instruction": str
     },
-    
-    "services.json": dict, 
+
+    "services.json": dict,
 }
+
+

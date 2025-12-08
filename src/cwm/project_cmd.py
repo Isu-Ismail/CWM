@@ -1,4 +1,3 @@
-# src/cwm/project_cmd.py
 import click
 from pathlib import Path
 from rich.console import Console
@@ -7,22 +6,20 @@ from .storage_manager import StorageManager
 
 console = Console()
 
+
 def _prompt_project_details(target_path, projects_list, default_alias=None, pre_startup=None):
     """
     Shared logic to ask for Alias and Startup Commands.
     Returns: (alias, startup_value) OR (None, None) if validation fails.
     """
-    # 1. ALIAS
     if not default_alias:
         default_alias = _get_unique_alias(target_path.name, projects_list)
-        
+
     alias = click.prompt("Enter Project Alias", default=default_alias)
     alias = _get_unique_alias(alias, projects_list)
 
-    # 2. STARTUP COMMANDS
     startup_value = None
-    
-    # Check if pre-provided (from flag) or ask interactively
+
     if pre_startup:
         raw_input = pre_startup
     else:
@@ -36,15 +33,13 @@ def _prompt_project_details(target_path, projects_list, default_alias=None, pre_
         tokens = [t.strip() for t in raw_input.split(",") if t.strip()]
         safe_cmds = []
         for cmd in tokens:
-            # Re-use your security check
             if not is_safe_startup_cmd(cmd, target_path):
                 click.echo(f"⚠ Unsafe startup command blocked: {cmd}")
-                return None, None # Fail signal
-                
+                return None, None  # Fail signal
+
             if cmd not in safe_cmds:
                 safe_cmds.append(cmd)
-        
-        # Collapse into string or list based on count
+
         startup_value = _startup_collapse(safe_cmds)
 
     return alias, startup_value
@@ -80,10 +75,11 @@ def _startup_collapse(values: list[str]):
 DANGER_KEYWORDS = [
     "rm ", "rm -", "del ", "rd ", "rmdir",
     "format ", "fdisk", "mkfs",
-    ":(){ :|:& };:", # Fork bomb
-    "sudo rm", 
+    ":(){ :|:& };:",  # Fork bomb
+    "sudo rm",
     "cwm ",   # Prevent recursion
 ]
+
 
 def is_safe_startup_cmd(cmd_input, project_root: Path) -> bool:
     """
@@ -94,7 +90,6 @@ def is_safe_startup_cmd(cmd_input, project_root: Path) -> bool:
     if not cmd_input:
         return False
 
-    # Normalize to list for checking
     cmds_to_check = []
     if isinstance(cmd_input, list):
         cmds_to_check = cmd_input
@@ -103,33 +98,28 @@ def is_safe_startup_cmd(cmd_input, project_root: Path) -> bool:
 
     for cmd in cmds_to_check:
         cmd = cmd.strip()
-        if not cmd: continue
-        
+        if not cmd:
+            continue
+
         cmd_lower = cmd.lower()
 
-        # 1) Block dangerous keywords
         if any(bad in cmd_lower for bad in DANGER_KEYWORDS):
             return False
 
-        # 2) Python script safety (Optional: keep if you want file boundary checks)
-        # If running a script, ensure it's inside the project
         parts = cmd.split()
         if len(parts) > 1 and parts[0] in ("python", "python3", "py"):
             script = parts[1]
-            # Ignore flags like -m
             if not script.startswith("-"):
                 try:
                     project_root = project_root.resolve()
-                    # Just check if path traversal attempts exist
                     if ".." in script or script.startswith("/"):
-                        # Strict check: resolves to outside?
                         script_path = (project_root / script).resolve()
                         if project_root not in script_path.parents and script_path != project_root:
                             return False
-                except: pass
+                except:
+                    pass
 
     return True
-
 
 
 def _get_unique_alias(base_name: str, existing_projects: list) -> str:
@@ -143,9 +133,6 @@ def _get_unique_alias(base_name: str, existing_projects: list) -> str:
         count += 1
         new_name = f"{base_name}-{count}"
     return new_name
-
-
-
 
 
 def _normalize_startup_cmd(value):
@@ -163,7 +150,6 @@ def _normalize_startup_cmd(value):
     return None
 
 
-
 @click.group("project")
 def project_cmd():
     """Manage workspace projects."""
@@ -177,11 +163,10 @@ def scan_projects(root):
     import time
     """Auto-detect projects in your User Home directory."""
     start_path = Path(root).resolve() if root else Path.home()
-    
+
     manager = StorageManager()
     data = manager.load_projects()
-    
-    # Current state
+
     existing_paths = {p["path"] for p in data.get("projects", [])}
     current_projects = data.get("projects", [])
     last_id = data.get("last_id", 0)
@@ -189,21 +174,19 @@ def scan_projects(root):
     scanner = ProjectScanner(start_path)
     found_candidates = []
 
-    # --- SCANNING PHASE ---
-    start_time = time.perf_counter() # <--- 2. Start Timer
+    start_time = time.perf_counter()  # <--- 2. Start Timer
 
     with console.status("[bold cyan]Scanning folders...", spinner="dots") as status:
-        # The generator error is fixed in Part 1, so this loop will now work
         for proj_path in scanner.scan_generator():
-            status.update(f"[bold cyan]Scanning... ({scanner.scanned_count} checked)")
+            status.update(
+                f"[bold cyan]Scanning... ({scanner.scanned_count} checked)")
             if str(proj_path) in existing_paths:
                 continue
             found_candidates.append(proj_path)
 
-    end_time = time.perf_counter() # <--- 3. Stop Timer
-    duration = end_time - start_time # <--- 4. Calculate Duration
+    end_time = time.perf_counter()  # <--- 3. Stop Timer
+    duration = end_time - start_time  # <--- 4. Calculate Duration
 
-    # --- PRINT STATS ---
     console.print(
         f"\n[dim]Scan Summary: Checked {scanner.scanned_count} folders in {duration:.2f} seconds.[/dim]"
     )
@@ -212,10 +195,9 @@ def scan_projects(root):
         console.print("[yellow]Scan complete. No new projects found.[/yellow]")
         return
 
-    console.print(f"[bold green]✔ Found {len(found_candidates)} candidates.[/bold green]")
+    console.print(
+        f"[bold green]✔ Found {len(found_candidates)} candidates.[/bold green]")
 
-    # --- IMPORT PHASE ---
-    # (Rest of your code remains exactly the same...)
     added_count = 0
 
     for p in found_candidates:
@@ -238,26 +220,25 @@ def scan_projects(root):
 
         if action == "y":
             alias, startup_cmd = _prompt_project_details(p, current_projects)
-            
-            if alias is None: 
+
+            if alias is None:
                 click.echo("Skipping due to validation error.")
                 continue
 
             last_id += 1
-            
+
             current_projects.append({
                 "id": last_id,
                 "alias": alias,
                 "path": str(p),
                 "hits": 0,
-                "startup_cmd": startup_cmd, 
+                "startup_cmd": startup_cmd,
                 "group": None
             })
-            
+
             added_count += 1
             click.echo(f"-> Saved as '{alias}'")
 
-    # --- SAVE PHASE ---
     if added_count > 0:
         data["projects"] = current_projects
         data["last_id"] = last_id
@@ -275,7 +256,6 @@ def add_project(path, name, startup):
     """Manually add a project folder."""
     manager = StorageManager()
 
-    # 1. Path Resolution
     if not path:
         path = click.prompt("Enter Project Path").strip()
 
@@ -292,21 +272,18 @@ def add_project(path, name, startup):
         click.echo("This path is already saved.")
         return
 
-    # --- CALL SHARED HELPER ---
-    # We pass 'name' and 'startup' if the user provided flags
     alias, startup_cmd = _prompt_project_details(
-        target, 
-        projects, 
-        default_alias=name, 
+        target,
+        projects,
+        default_alias=name,
         pre_startup=startup
     )
 
     if alias is None:
-        return # Failed validation
+        return  # Failed validation
 
-    # Save
     last_id = data.get("last_id", 0) + 1
-    
+
     projects.append({
         "id": last_id,
         "alias": alias,
@@ -321,10 +298,6 @@ def add_project(path, name, startup):
     manager.save_projects(data)
 
     click.echo(f"Added project '{alias}' → {target}")
-
-
-
-
 
 
 @project_cmd.command("list")
@@ -373,7 +346,6 @@ def remove_project(target, count):
 
     removed_something = False
 
-    # --- Path A: Direct Removal (Argument provided) ---
     if target:
         found_idx = -1
 
@@ -397,7 +369,6 @@ def remove_project(target, count):
             click.echo(f"Project '{target}' not found.")
             return
 
-    # --- Path B: Interactive List ---
     else:
         sorted_projs = sorted(
             projects, key=lambda x: (x.get("hits", 0), x["alias"])
@@ -477,7 +448,6 @@ def remove_project(target, count):
             click.echo(f"Removed: {removed['alias']}")
             count_removed += 1
 
-        # remove removed projects from groups' project_ids
         for g in groups:
             g["project_ids"] = [
                 pid for pid in g.get("project_ids", []) if pid not in removed_ids
@@ -486,11 +456,9 @@ def remove_project(target, count):
         click.echo(f"\nSuccessfully removed {count_removed} projects.")
         removed_something = True
 
-    # --- CRITICAL: RE-INDEX IDs ---
     if removed_something:
         click.echo("Re-indexing project IDs...")
 
-        # sort by existing ID to keep relative order stable
         projects.sort(key=lambda x: x["id"])
 
         id_mapping = {}
@@ -500,10 +468,8 @@ def remove_project(target, count):
             p["id"] = new_id
             id_mapping[old_id] = new_id
 
-        # update last_id
         data["last_id"] = len(projects)
 
-        # also update group project_ids to new IDs
         for g in groups:
             new_pids = []
             for pid in g.get("project_ids", []):
@@ -516,6 +482,7 @@ def remove_project(target, count):
         data["projects"] = projects
         manager.save_projects(data)
         click.echo("Done.")
+
 
 @project_cmd.command("edit")
 @click.option("-id", "project_id", type=int, help="Project ID to edit.")
@@ -542,7 +509,6 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
         click.echo("No projects saved.")
         return
 
-    # select project
     if project_id is None:
         click.echo("--- Projects ---")
         for p in sorted(projects, key=lambda x: x["id"]):
@@ -561,11 +527,7 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
     project_root = Path(proj["path"]).resolve()
     startup_list = _startup_to_list(proj.get("startup_cmd"))
 
-    # -------------------------
-    # POWER MODE
-    # -------------------------
     if new_alias or new_path or add_cmds or remove_cmds:
-        # alias update
         if new_alias:
             alias = new_alias.strip()
             if not alias:
@@ -576,7 +538,6 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
                 return
             proj["alias"] = alias
 
-        # path update
         if new_path:
             cleaned = new_path.strip().strip('"').strip("'")
             resolved = Path(cleaned).resolve()
@@ -586,10 +547,8 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
             proj["path"] = str(resolved)
             project_root = resolved
 
-        # startup add/remove
         current = list(startup_list)
 
-        # ADD (validated, no duplicates)
         for cmd in add_cmds:
             c = cmd.strip()
             if not c:
@@ -600,22 +559,17 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
             if c not in current:
                 current.append(c)
 
-        # REMOVE
         for cmd in remove_cmds:
             c = cmd.strip()
             if c in current:
                 current.remove(c)
 
-        # collapse back to storage
         proj["startup_cmd"] = _startup_collapse(current)
 
         manager.save_projects(data)
         click.echo("Project updated.")
         return
 
-    # -------------------------
-    # WIZARD MODE
-    # -------------------------
     click.echo(f"\n--- Editing Project {project_id} ---")
     click.echo(f"Alias: {proj['alias']}")
     click.echo(f"Path:  {proj['path']}")
@@ -626,7 +580,6 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
     else:
         click.echo("  (none)")
 
-    # alias
     new_alias_wiz = click.prompt("New Alias", default=proj["alias"]).strip()
     if new_alias_wiz != proj["alias"]:
         if any(p["alias"] == new_alias_wiz and p["id"] != project_id for p in projects):
@@ -634,7 +587,6 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
             return
         proj["alias"] = new_alias_wiz
 
-    # path
     new_path_wiz = click.prompt("New Path", default=proj["path"]).strip()
     if new_path_wiz != proj["path"]:
         cleaned = new_path_wiz.strip().strip('"').strip("'")
@@ -645,7 +597,6 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
         proj["path"] = str(resolved)
         project_root = resolved
 
-    # startup commands
     sc_input = click.prompt(
         "Startup commands (comma-separated) or Enter to keep",
         default="",
@@ -665,3 +616,4 @@ def edit_project(project_id, new_alias, new_path, add_cmds, remove_cmds):
 
     manager.save_projects(data)
     click.echo("Project updated.")
+

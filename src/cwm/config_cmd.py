@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from rich.prompt import Prompt, IntPrompt, Confirm
+from rich.prompt import Prompt, IntPrompt
 
 from .storage_manager import StorageManager, GLOBAL_CWM_BANK, find_nearest_bank_path
 from .rich_help import RichHelpCommand
@@ -17,9 +17,6 @@ from .utils import get_all_history_candidates
 console = Console()
 GLOBAL_CONFIG_PATH = GLOBAL_CWM_BANK / "config.json"
 
-# =========================================================
-# HELPERS (Private)
-# =========================================================
 def _load_global_config():
     if not GLOBAL_CONFIG_PATH.exists():
         return {}
@@ -78,9 +75,6 @@ def _modify_config_list(path: Path, key: str, value: str, action: str):
     path.write_text(json.dumps(data, indent=4))
 
 
-# =========================================================
-# MAIN COMMAND
-# =========================================================
 @click.command("config", help="Edit configuration settings.", cls=RichHelpCommand)
 @click.option("--shell", is_flag=True, help="Select preferred shell history file.")
 @click.option("--global", "global_mode", is_flag=True, help="Target Global config explicitly.")
@@ -101,12 +95,9 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
 
     manager = StorageManager()
 
-    # Determine local/global write targets
     local_bank = find_nearest_bank_path(Path.cwd())
     local_config = local_bank / "config.json" if local_bank else None
 
-    # Logic: If global flag set, ignore local. Else prefer local if available.
-    target_path = GLOBAL_CONFIG_PATH if global_mode else (local_config or GLOBAL_CONFIG_PATH)
     target_name = "Global" if global_mode else ("Local" if local_config and not global_mode else "Global")
 
     def write_global(key, value):
@@ -116,17 +107,12 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         if local_config:
             _write_config(local_config, key, value)
         else:
-            # Fallback if no local config exists yet
             write_global(key, value)
 
-    # =========================================================
-    # SHOW CONFIG
-    # =========================================================
     if show:
         console.print("")
         config = manager.get_config() # This gets merged/effective config usually
 
-        # 1. Paths Info
         path_text = Text()
         path_text.append("Global Config: ", style="dim")
         path_text.append(f"{GLOBAL_CONFIG_PATH}\n", style="cyan")
@@ -141,7 +127,6 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
 
         console.print(Panel(path_text, title="[bold]Configuration Sources[/bold]", border_style="dim"))
 
-        # 2. Settings Info
         settings_text = Text()
         settings_text.append(f"Target:         {target_name}\n", style="bold yellow")
         settings_text.append(f"History File:   {config.get('history_file', 'Auto-Detect')}\n")
@@ -153,27 +138,22 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
 
         console.print(Panel(settings_text, title="[bold]General Settings[/bold]", border_style="blue"))
 
-        # 3. AI Info
         ai_text = Text()
         
         def format_key(k): return f"{k[:4]}...{k[-4:]}" if k else "Not Set"
 
-        # Gemini
         g = config.get("gemini", {})
         ai_text.append("Gemini:   ", style="bold cyan")
         ai_text.append(f"Model='{g.get('model') or 'None'}'  Key='{format_key(g.get('key'))}'\n")
 
-        # OpenAI
         o = config.get("openai", {})
         ai_text.append("OpenAI:   ", style="bold green")
         ai_text.append(f"Model='{o.get('model') or 'None'}'  Key='{format_key(o.get('key'))}'\n")
 
-        # Local
         l = config.get("local_ai", {})
         ai_text.append("Local AI: ", style="bold magenta")
         ai_text.append(f"Model='{l.get('model') or 'None'}'\n\n")
 
-        # Instruction
         instr = config.get("ai_instruction")
         if instr:
             preview = instr[:60].replace("\n", " ") + "..." if len(instr) > 60 else instr
@@ -185,9 +165,6 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         console.print("")
         return
 
-    # =========================================================
-    # AI WIZARDS
-    # =========================================================
     if gemini:
         console.print("\n[bold cyan]?[/bold cyan] [bold]Configure Gemini[/bold]")
         data = _load_global_config()
@@ -254,9 +231,6 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         console.print("  [green]✔ Instruction updated.[/green]\n")
         return
 
-    # =========================================================
-    # STANDARD SETTINGS
-    # =========================================================
     if editor:
         write_global("default_editor", editor)
         console.print(f"  [green]✔ Default editor set to:[/green] {editor}")
@@ -275,9 +249,6 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         _modify_config_list(GLOBAL_CONFIG_PATH, "project_markers", remove_marker, "remove")
         return
 
-    # =========================================================
-    # SHELL SELECTION
-    # =========================================================
     if shell:
         candidates = get_all_history_candidates()
         if not candidates:
@@ -302,9 +273,6 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         console.print(f"  [green]✔ History source updated:[/green] {selected_path.name}")
         return
 
-    # =========================================================
-    # CLEANUP
-    # =========================================================
     if clear_local:
         if not local_bank:
             console.print("  [red]✖ Error: No local bank found.[/red]")
@@ -318,6 +286,5 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         console.print("  [green]✔ Global configuration cleared.[/green]")
         return
 
-    # Fallback Help
     console.print("\n[dim]Usage: cwm config [OPTIONS][/dim]")
     console.print("[dim]Try 'cwm config --help' for details.[/dim]\n")

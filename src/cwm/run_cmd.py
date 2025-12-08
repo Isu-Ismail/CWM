@@ -6,11 +6,8 @@ import os
 import shutil
 import subprocess
 from .storage_manager import StorageManager
-
-# try:
 from .service_manager import ServiceManager
-# except ImportError:
-#     ServiceManager = None
+
 
 def _require_gui_deps():
     if ServiceManager is None:

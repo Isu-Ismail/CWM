@@ -1,10 +1,8 @@
-# cwm/file_mapper.py
 import os
 import pathspec
 from pathlib import Path
 from typing import List, Dict
 
-# --- 1. CONSTANTS & CONFIGURATION ---
 ALWAYS_IGNORE = [
     ".git/",
     ".cwm/",
@@ -42,18 +40,19 @@ PROJECT_MARKERS = {
     "rust": ["Cargo.toml"]
 }
 
+
 class FileMapper:
     def __init__(self, root_path: Path):
         self.root = root_path.resolve()
-        self.safety_spec = pathspec.PathSpec.from_lines('gitwildmatch', ALWAYS_IGNORE)
-        
-        # Load configs
+        self.safety_spec = pathspec.PathSpec.from_lines(
+            'gitwildmatch', ALWAYS_IGNORE)
+
         self.ignore_spec = self._load_spec(".cwmignore")
-        self.include_paths = self._load_include_paths() # Returns list of Paths
-        
-        self.id_map: Dict[str, Path] = {} 
+        self.include_paths = self._load_include_paths()  # Returns list of Paths
+
+        self.id_map: Dict[str, Path] = {}
         self.tree_lines: List[str] = []
-        self.clean_tree_str: str = "" 
+        self.clean_tree_str: str = ""
 
     def _load_spec(self, filename):
         path = self.root / filename
@@ -69,7 +68,7 @@ class FileMapper:
     def _load_include_paths(self) -> List[Path]:
         """
         Loads .cwminclude and accepts ONLY valid folder paths.
-        
+
         - Ignores file names completely (like __init__.py)
         - Ignores plain text or unknown keywords
         - Requires trailing slash
@@ -90,7 +89,6 @@ class FileMapper:
 
             for raw in lines:
 
-                # --- Clean hidden characters ---
                 line = (
                     raw.replace("\ufeff", "")    # BOM
                     .replace("\u200b", "")    # zero-width space
@@ -101,25 +99,19 @@ class FileMapper:
                 if not line or line.startswith("#"):
                     continue
 
-                # Must end with "/" — skip anything else (including files)
                 if not line.endswith("/"):
                     print(f"✗ Skipped (not a folder): '{raw}'")
                     continue
 
-                # Normalize slashes
                 line = line.replace("\\", "/")
 
-                # Remove trailing CR or spaces safely
                 line = line.rstrip("\r").rstrip("\n").strip()
 
-                # Now enforce trailing slash (in case CR removed it)
                 if not line.endswith("/"):
                     line += "/"
 
-                # Resolve folder path
                 target = (self.root / line).resolve()
 
-                # Must exist and must be a directory
                 if target.exists() and target.is_dir():
                     valid_folders.append(target)
                     print(f"✓ Folder added: '{line}'")
@@ -130,7 +122,6 @@ class FileMapper:
             print("ERROR reading .cwminclude:", e)
 
         return valid_folders
-
 
     def _detect_project_type(self) -> str:
         for lang, markers in PROJECT_MARKERS.items():
@@ -143,9 +134,11 @@ class FileMapper:
         try:
             rel_path = path.relative_to(self.root)
             check_path = str(rel_path) + ("/" if path.is_dir() else "")
-            
-            if self.safety_spec.match_file(check_path): return True
-            if self.ignore_spec and self.ignore_spec.match_file(check_path): return True
+
+            if self.safety_spec.match_file(check_path):
+                return True
+            if self.ignore_spec and self.ignore_spec.match_file(check_path):
+                return True
             return False
         except ValueError:
             return True
@@ -158,33 +151,28 @@ class FileMapper:
         self.id_map = {}
         self.tree_lines = []
         clean_lines = []
-        
+
         valid_files = []
-        
-        # 1. Determine Targets
+
         scan_targets = self.include_paths
         if not scan_targets:
             scan_targets = [self.root]
 
-        # 2. Scan Targets
         for target in scan_targets:
-            # Walk ONLY this target folder
             for root, dirs, files in os.walk(target):
-                # Prune ignored dirs in-place
-                dirs[:] = [d for d in dirs if not self._is_ignored(Path(root) / d)]
-                
+                dirs[:] = [
+                    d for d in dirs if not self._is_ignored(Path(root) / d)]
+
                 for f in files:
                     full_path = Path(root) / f
                     if not self._is_ignored(full_path):
                         valid_files.append(full_path)
 
-        # Sort files for consistent tree
         valid_files.sort(key=lambda p: (len(p.parts), p.name))
-        
-        if not valid_files:
-            return 
 
-        # 3. Build Hierarchy Dict
+        if not valid_files:
+            return
+
         tree_structure = {}
         for path in valid_files:
             rel_path = path.relative_to(self.root)
@@ -195,10 +183,8 @@ class FileMapper:
                     current_level[part] = {}
                 current_level = current_level[part]
 
-        # 4. Render Tree
         current_id = 1
-        
-        # Root Node
+
         self.id_map[str(current_id)] = self.root
         self.tree_lines.append(f"[{current_id}] {self.root.name}/")
         clean_lines.append(f"{self.root.name}/")
@@ -206,32 +192,27 @@ class FileMapper:
 
         def _render_node(node: dict, prefix: str, current_path: Path):
             nonlocal current_id
-            
-            # Sort: Dirs first, then files
+
             keys = list(node.keys())
-            keys.sort(key=lambda x: (0 if (current_path / x).is_dir() else 1, x.lower()))
+            keys.sort(key=lambda x: (
+                0 if (current_path / x).is_dir() else 1, x.lower()))
 
             count = len(keys)
             for i, name in enumerate(keys):
                 is_last = (i == count - 1)
                 full_child_path = current_path / name
-                
+
                 cid = str(current_id)
                 self.id_map[cid] = full_child_path
                 current_id += 1
-                
+
                 connector = "└── " if is_last else "├── "
-                
-                # Display Logic:
-                # If it's a top-level include target, showing just the name might be confusing.
-                # But since we reconstructed the tree from root, it will naturally show
-                # src -> cwm -> utils.py, which resolves the ambiguity.
-                
+
                 self.tree_lines.append(f"{prefix}{connector}[{cid}] {name}")
                 clean_lines.append(f"{prefix}{connector}{name}")
-                
+
                 children = node[name]
-                if children: # It is a directory
+                if children:  # It is a directory
                     extension = "    " if is_last else "│   "
                     _render_node(children, prefix + extension, full_child_path)
 
@@ -244,19 +225,20 @@ class FileMapper:
             i = i.strip()
             if i in self.id_map:
                 selected_paths.add(self.id_map[i])
-        
+
         final_files = set()
         sorted_paths = sorted(list(selected_paths), key=lambda p: len(p.parts))
         processed_roots = []
-        
+
         for p in sorted_paths:
             is_covered = False
             for root in processed_roots:
                 if root in p.parents:
                     is_covered = True
                     break
-            if is_covered: continue 
-            
+            if is_covered:
+                continue
+
             if p.is_dir():
                 processed_roots.append(p)
                 for root, _, files in os.walk(p):
@@ -272,7 +254,7 @@ class FileMapper:
         """Creates .cwmignore and .cwminclude with instructions."""
         ignore_target = self.root / ".cwmignore"
         include_target = self.root / ".cwminclude"
-        
+
         if not include_target.exists():
             include_content = [
                 "# --- CWM Include File ---",
@@ -285,23 +267,25 @@ class FileMapper:
                 "# src/",
                 ""
             ]
-            include_target.write_text("\n".join(include_content), encoding="utf-8")
+            include_target.write_text(
+                "\n".join(include_content), encoding="utf-8")
 
         if ignore_target.exists():
             return "exists"
 
         content_lines = []
         source_type = "default"
-        
+
         gitignore = self.root / ".gitignore"
         if gitignore.exists():
             try:
-                content_lines = gitignore.read_text(encoding='utf-8').splitlines()
+                content_lines = gitignore.read_text(
+                    encoding='utf-8').splitlines()
                 source_type = ".gitignore"
-            except: pass
-        
+            except:
+                pass
+
         if not content_lines:
-            # Smart Template Logic
             content_lines = list(BASE_GENERATED_IGNORE)
             found_any = False
             for marker, rules in SMART_RULES.items():
@@ -310,7 +294,9 @@ class FileMapper:
                     found_any = True
             if not found_any:
                 source_type = "Generic Defaults"
-                content_lines.extend(["node_modules/", "venv/", "__pycache__/"])
-        
+                content_lines.extend(
+                    ["node_modules/", "venv/", "__pycache__/"])
+
         ignore_target.write_text("\n".join(content_lines), encoding="utf-8")
         return source_type
+

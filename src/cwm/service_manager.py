@@ -1,26 +1,23 @@
-# src/cwm/service_manager.py
 import os
 import sys
 import json
 import time
 import subprocess
-import shlex
 from pathlib import Path
 from .storage_manager import StorageManager, GLOBAL_CWM_BANK
-from .project_cmd import is_safe_startup_cmd 
-from .schema_validator import validate_service_entry 
-from .utils import make_hidden 
+from .project_cmd import is_safe_startup_cmd
+from .schema_validator import validate_service_entry
 
 try:
     import psutil
 except ImportError:
     psutil = None
 
-# --- CONSTANTS ---
 ORCH_DIR = GLOBAL_CWM_BANK / "orchestrator"
 STATE_FILE = ORCH_DIR / "services.json"
 WATCHER_PID_FILE = ORCH_DIR / "watcher.pid"
 LOG_DIR = ORCH_DIR / "logs"
+
 
 class ServiceManager:
     def __init__(self):
@@ -30,10 +27,12 @@ class ServiceManager:
         self._ensure_paths()
 
     def _ensure_paths(self):
-        if not ORCH_DIR.exists(): ORCH_DIR.mkdir(parents=True)
-        if not LOG_DIR.exists(): LOG_DIR.mkdir(parents=True)
-        
-        if not STATE_FILE.exists(): 
+        if not ORCH_DIR.exists():
+            ORCH_DIR.mkdir(parents=True)
+        if not LOG_DIR.exists():
+            LOG_DIR.mkdir(parents=True)
+
+        if not STATE_FILE.exists():
             STATE_FILE.write_text("{}")
 
     def _force_unhide(self, path):
@@ -41,19 +40,23 @@ class ServiceManager:
             try:
                 import ctypes
                 ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x80)
-            except: pass
+            except:
+                pass
 
     def _load_state(self):
         try:
-            if not STATE_FILE.exists(): return {}
+            if not STATE_FILE.exists():
+                return {}
             content = STATE_FILE.read_text()
-            if not content.strip(): return {}
+            if not content.strip():
+                return {}
             data = json.loads(content)
-            if not isinstance(data, dict): raise ValueError("Root must be a dictionary")
+            if not isinstance(data, dict):
+                raise ValueError("Root must be a dictionary")
             return data
         except (json.JSONDecodeError, ValueError, Exception):
             self.nuke_all()
-            self._save_state({}) 
+            self._save_state({})
             return {}
 
     def _save_state(self, data):
@@ -63,7 +66,6 @@ class ServiceManager:
         except Exception as e:
             print(f"Error saving state: {e}")
 
-    # --- POLLING AGENT ---
     def run_watcher_loop(self):
         current_pid = os.getpid()
         self._force_unhide(WATCHER_PID_FILE)
@@ -87,14 +89,14 @@ class ServiceManager:
                                     is_alive = True
                             except (psutil.NoSuchProcess, psutil.AccessDenied):
                                 is_alive = False
-                        
+
                         if is_alive:
                             active_count += 1
                         else:
                             info["status"] = "stopped"
                             info["pid"] = None
                             dirty = True
-                
+
                 if dirty:
                     self._save_state(state)
 
@@ -102,29 +104,32 @@ class ServiceManager:
                     break
         finally:
             if WATCHER_PID_FILE.exists():
-                try: WATCHER_PID_FILE.unlink()
-                except: pass
+                try:
+                    WATCHER_PID_FILE.unlink()
+                except:
+                    pass
 
     def _ensure_watcher_running(self):
         if WATCHER_PID_FILE.exists():
             try:
                 w_pid = int(WATCHER_PID_FILE.read_text().strip())
-                if psutil.pid_exists(w_pid): return 
-            except: pass
-        
+                if psutil.pid_exists(w_pid):
+                    return
+            except:
+                pass
+
         cmd = [sys.executable, "-m", "cwm.cli", "run", "_watcher"]
         kwargs = {
             "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL,
             "cwd": str(ORCH_DIR)
         }
         if os.name == 'nt':
-            kwargs["creationflags"] = 0x08000000 
-            kwargs["shell"] = False 
+            kwargs["creationflags"] = 0x08000000
+            kwargs["shell"] = False
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen(cmd, **kwargs)
 
-    # --- STATUS CHECK ---
     def get_services_status(self):
         state = self._load_state()
         dirty = False
@@ -134,7 +139,8 @@ class ServiceManager:
                 if pid:
                     try:
                         proc = psutil.Process(pid)
-                        if proc.status() == psutil.STATUS_ZOMBIE: raise psutil.NoSuchProcess(pid)
+                        if proc.status() == psutil.STATUS_ZOMBIE:
+                            raise psutil.NoSuchProcess(pid)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         info["status"] = "stopped"
                         info["pid"] = None
@@ -145,29 +151,32 @@ class ServiceManager:
             elif pid is not None:
                 info["pid"] = None
                 dirty = True
-        
-        if dirty: self._save_state(state)
+
+        if dirty:
+            self._save_state(state)
         return state
 
-    # --- ACTIONS ---
     def start_project(self, project_id: int):
         state = self.get_services_status()
         str_id = str(project_id)
-        if str_id in state and state[str_id]["status"] == "running": return False, "Already running."
+        if str_id in state and state[str_id]["status"] == "running":
+            return False, "Already running."
 
         data = self.manager.load_projects()
-        proj = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-        if not proj: return False, "Project ID not found."
+        proj = next((p for p in data.get("projects", [])
+                    if p["id"] == project_id), None)
+        if not proj:
+            return False, "Project ID not found."
 
         raw_cmd = proj.get("startup_cmd")
-        if not raw_cmd: return False, "No startup command."
+        if not raw_cmd:
+            return False, "No startup command."
 
         root_path = Path(proj["path"]).resolve()
-        
+
         if not is_safe_startup_cmd(raw_cmd, root_path):
             return False, "Unsafe startup command."
 
-        # Convert list to chained string
         if isinstance(raw_cmd, list):
             joiner = " && " if os.name == 'nt' else " && "
             cmd_str = joiner.join(raw_cmd)
@@ -177,11 +186,11 @@ class ServiceManager:
         cmd_str = cmd_str.replace("$ROOT", str(root_path))
 
         log_file = LOG_DIR / f"{project_id}.log"
-        out_file = None 
-        
+        out_file = None
+
         try:
             out_file = open(log_file, "w", encoding="utf-8")
-            args = cmd_str 
+            args = cmd_str
 
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
@@ -195,17 +204,16 @@ class ServiceManager:
             }
 
             if os.name == 'nt':
-                # FIX: 0x08000000 = CREATE_NO_WINDOW (Starts silently in background)
-                kwargs["creationflags"] = 0x08000000 
+                kwargs["creationflags"] = 0x08000000
                 kwargs["shell"] = True
             else:
                 kwargs["start_new_session"] = True
-                kwargs["shell"] = True 
+                kwargs["shell"] = True
 
             proc = subprocess.Popen(args, **kwargs)
-            
-            out_file.close() 
-            
+
+            out_file.close()
+
             new_entry = {
                 "project_id": project_id,
                 "alias": proj["alias"],
@@ -218,15 +226,17 @@ class ServiceManager:
             }
             state[str_id] = validate_service_entry(new_entry)
             self._save_state(state)
-            
+
             self._ensure_watcher_running()
-            
+
             return True, f"Started (PID {proc.pid})"
 
         except Exception as e:
-            if out_file: 
-                try: out_file.close() 
-                except: pass
+            if out_file:
+                try:
+                    out_file.close()
+                except:
+                    pass
             return False, str(e)
 
     def register_viewer(self, project_id: int, viewer_pid: int):
@@ -242,26 +252,32 @@ class ServiceManager:
     def stop_project(self, project_id: int):
         state = self.get_services_status()
         str_id = str(project_id)
-        if str_id not in state: return False, "Not found."
-        
+        if str_id not in state:
+            return False, "Not found."
+
         info = state[str_id]
         main_pid = info.get("pid")
         viewers = info.get("viewers", [])
 
         for v_pid in viewers:
             try:
-                if psutil.pid_exists(v_pid): psutil.Process(v_pid).kill()
-            except: pass
-        
+                if psutil.pid_exists(v_pid):
+                    psutil.Process(v_pid).kill()
+            except:
+                pass
+
         if main_pid:
             try:
                 parent = psutil.Process(main_pid)
                 for child in parent.children(recursive=True):
-                    try: child.kill() 
-                    except: pass
+                    try:
+                        child.kill()
+                    except:
+                        pass
                 parent.kill()
-            except psutil.NoSuchProcess: pass 
-        
+            except psutil.NoSuchProcess:
+                pass
+
         info["status"] = "stopped"
         info["pid"] = None
         info["viewers"] = []
@@ -277,8 +293,7 @@ class ServiceManager:
             self._save_state(state)
             return True, "Removed."
         return False, "Not found."
-    
-    # GUI Compatibility Alias
+
     remove_service_entry = remove_entry
 
     def stop_all(self):
@@ -294,15 +309,19 @@ class ServiceManager:
         if WATCHER_PID_FILE.exists():
             try:
                 pid_str = WATCHER_PID_FILE.read_text().strip()
-                if not pid_str: return False, "No watcher PID found."
+                if not pid_str:
+                    return False, "No watcher PID found."
                 pid = int(pid_str)
                 if psutil.pid_exists(pid):
                     psutil.Process(pid).kill()
                     return True, f"Watcher (PID {pid}) killed."
-            except Exception as e: return False, f"Failed: {e}"
-            finally: 
-                try: WATCHER_PID_FILE.unlink()
-                except: pass
+            except Exception as e:
+                return False, f"Failed: {e}"
+            finally:
+                try:
+                    WATCHER_PID_FILE.unlink()
+                except:
+                    pass
         return False, "Watcher not running."
 
     def _kill_cwm_ghosts(self):
@@ -310,7 +329,8 @@ class ServiceManager:
         killed_count = 0
         try:
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                if proc.info['pid'] == myself: continue
+                if proc.info['pid'] == myself:
+                    continue
                 try:
                     name = proc.info['name'].lower()
                     cmdline = proc.info['cmdline'] or []
@@ -318,8 +338,10 @@ class ServiceManager:
                     if 'python' in name and 'cwm' in cmd_str:
                         proc.kill()
                         killed_count += 1
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess): pass
-        except: pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+        except:
+            pass
         return killed_count
 
     def nuke_all(self):
@@ -328,36 +350,36 @@ class ServiceManager:
         Returns: (list_of_killed_info, watcher_message)
         """
         state = self._load_state()
-        killed_list = [] 
+        killed_list = []
 
-        # 1. Kill Projects
         for pid_str, info in state.items():
-            # Check if running
             if info.get('status') == 'running':
                 pid = info.get('pid')
                 alias = info.get('alias', 'Unknown')
-                
+
                 if pid:
                     try:
-                        # Kill the process tree
                         parent = psutil.Process(pid)
                         for child in parent.children(recursive=True):
-                            try: child.kill()
-                            except: pass
+                            try:
+                                child.kill()
+                            except:
+                                pass
                         parent.kill()
-                        
+
                         killed_list.append(f"Project: {alias} (PID {pid})")
                     except (psutil.NoSuchProcess, Exception):
-                        killed_list.append(f"Cleaned ghost: {alias} (PID {pid})")
-                
-                # Update state to stopped
+                        killed_list.append(
+                            f"Cleaned ghost: {alias} (PID {pid})")
+
                 info['status'] = 'stopped'
                 info['pid'] = None
-                info['viewers'] = [] # Clear viewers list too
+                info['viewers'] = []  # Clear viewers list too
 
         self._save_state(state)
 
-        # 2. Kill Watcher (Reuse your existing method)
         _, w_msg = self.kill_watcher()
 
         return killed_list, w_msg
+
+

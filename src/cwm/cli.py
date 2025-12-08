@@ -4,7 +4,6 @@ from difflib import get_close_matches
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
-# Import minimal utils only
 from .utils import (
     is_history_sync_enabled,
     safe_create_cwm_folder,
@@ -21,8 +20,6 @@ try:
 except PackageNotFoundError:
     __version__ = "2.0.0" 
 
-# --- OPTIMIZED COMMAND MAP (Now includes descriptions) ---
-# Format: "command": ("module", "function", "Description for help menu")
 COMMAND_MAP = {
     # Workspace
     "jump":    (".jump_cmd", "jump_cmd", "Jump to a project"),
@@ -61,7 +58,6 @@ class LazyGroup(click.Group):
         if cmd_name == "init": return init
         if cmd_name == "hello": return hello
 
-        # 2. Handle Lazy Loaded Commands
         if cmd_name in COMMAND_MAP:
             module_name, func_name, _ = COMMAND_MAP[cmd_name] # Ignore desc here
             try:
@@ -74,7 +70,6 @@ class LazyGroup(click.Group):
             except AttributeError:
                 return None
 
-        # 3. Fuzzy Matching
         possibilities = list(COMMAND_MAP.keys()) + ["init", "hello"]
         close = get_close_matches(cmd_name, possibilities, n=1, cutoff=0.45)
         if close:
@@ -86,13 +81,11 @@ class LazyGroup(click.Group):
         """
         FAST HELP: Reads descriptions from COMMAND_MAP instead of importing modules.
         """
-        # 1. Built-in Commands (Must get manually since they aren't in map)
         commands = [
             ("init", init.get_short_help_str()),
             ("hello", hello.get_short_help_str())
         ]
 
-        # 2. Lazy Commands (Read strings from Map directly!)
         for name, data in COMMAND_MAP.items():
             desc = data[2] # Index 2 is the description
             commands.append((name, desc))
@@ -100,9 +93,7 @@ class LazyGroup(click.Group):
         if not commands:
             return
 
-        limit = formatter.width - 6 - max(len(c[0]) for c in commands)
 
-        # Bucket commands
         cmd_to_cat = {}
         for cat, cmds in CATEGORIES.items():
             for c in cmds:
@@ -115,7 +106,6 @@ class LazyGroup(click.Group):
             cat = cmd_to_cat.get(name, "Other Commands")
             buckets[cat].append((name, help_text))
 
-        # Print Categories
         for cat in CATEGORIES:
             if buckets[cat]:
                 heading = click.style(cat, fg="yellow", bold=True)
@@ -154,11 +144,9 @@ def cli():
 
     A complete workspace and history manager for developers.
     """
-    # MOVED: Only check/create folder when CLI actually runs, not on import
     if not GLOBAL_CWM_BANK.exists():
         safe_create_cwm_folder(GLOBAL_CWM_BANK)
 
-# --- BUILT-IN COMMANDS ---
 
 @cli.command(cls=RichHelpCommand)
 def init():

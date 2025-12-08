@@ -1,8 +1,17 @@
-# cwm/setup_cmd.py
 import click
 import os
 import platform
 from pathlib import Path
+
+# Rich Imports
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt, IntPrompt
+from rich.text import Text
+
+from .rich_help import RichHelpCommand
+
+console = Console()
 
 # --- CONFIGURATION BLOCKS ---
 
@@ -53,28 +62,30 @@ def _append_config_block(file_path: Path, block: str, shell_name: str):
             if not file_path.parent.exists():
                 file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.touch()
-            click.echo(f"Created configuration file: {file_path}")
+            console.print(f"[dim]Created configuration file:[/dim] {file_path}")
         except Exception as e:
-            click.echo(f"Error creating file {file_path}: {e}", err=True)
+            console.print(f"[red]✖ Error creating file {file_path}:[/red] {e}")
             return
 
     # 2. Check for existing setup
     try:
         content = file_path.read_text(encoding="utf-8", errors="ignore")
         if "# --- CWM History Setup ---" in content:
-            click.echo(f"Success: {shell_name} is already configured in {file_path.name}.")
+            console.print(f"[green]✔ Success:[/green] {shell_name} is already configured in [bold]{file_path.name}[/bold].")
             return
     except Exception as e:
-        click.echo(f"Warning: Could not read {file_path}: {e}")
+        console.print(f"[yellow]! Warning:[/yellow] Could not read {file_path}: {e}")
 
     # 3. Append
-    click.echo(f"Configuring {shell_name} at: {file_path}")
+    console.print(f"[bold cyan]➜ Configuring {shell_name}...[/bold cyan]")
+    console.print(f"  [dim]Target: {file_path}[/dim]")
+    
     try:
         with open(file_path, "a", encoding="utf-8") as f:
             f.write("\n" + block + "\n")
-        click.echo(f"Done! Please restart your {shell_name} terminal.")
+        console.print(f"[bold green]✔ Done![/bold green] Please restart your {shell_name} terminal.")
     except Exception as e:
-        click.echo(f"Error writing to file: {e}", err=True)
+        console.print(f"[red]✖ Error writing to file:[/red] {e}")
 
 
 def _setup_powershell():
@@ -94,16 +105,13 @@ def _setup_powershell():
     if ps_path.exists():
         target_profile = ps_path / "Microsoft.PowerShell_profile.ps1"
     else:
-        # Default to legacy if Core folder missing, or create Core if on modern OS?
-        # Let's try to find where the user actually is.
-        # Since we can't easily ask the running shell process for $PROFILE from python easily without subprocess,
-        # We will create the Legacy one as fallback which usually works for built-in PS.
+        # Default to legacy if Core folder missing
         target_profile = legacy_path / "Microsoft.PowerShell_profile.ps1"
 
     _append_config_block(target_profile, PWSH_CONFIG, "PowerShell")
 
 
-@click.command("setup")
+@click.command("setup", cls=RichHelpCommand)
 @click.option("--force", is_flag=True, help="Manually select shell and force setup.")
 def setup_cmd(force):
     """
@@ -116,21 +124,21 @@ def setup_cmd(force):
     
     # --- 1. FORCE MODE ---
     if force:
-        click.echo("--- Manual Setup ---")
-        click.echo("1. Bash (Linux / Mac / Git Bash)")
-        click.echo("2. Zsh (Linux / Mac)")
-        click.echo("3. PowerShell (Windows)")
+        console.print("\n[bold]Manual Setup Mode[/bold]")
+        console.print("  [cyan]1)[/cyan] Bash [dim](Linux / Mac / Git Bash)[/dim]")
+        console.print("  [cyan]2)[/cyan] Zsh [dim](Linux / Mac)[/dim]")
+        console.print("  [cyan]3)[/cyan] PowerShell [dim](Windows)[/dim]")
+        console.print("")
         
         try:
-            choice = click.prompt("Select shell", type=int)
+            choice = IntPrompt.ask("Select shell", choices=["1", "2", "3"])
+            
             if choice == 1:
                 _append_config_block(bashrc, BASH_CONFIG, "Bash")
             elif choice == 2:
                 _append_config_block(zshrc, ZSH_CONFIG, "Zsh")
             elif choice == 3:
                 _setup_powershell()
-            else:
-                click.echo("Invalid choice.")
         except:
             pass
         return
@@ -143,10 +151,10 @@ def setup_cmd(force):
         is_git_bash = "MSYSTEM" in os.environ or "bash" in os.environ.get("SHELL", "").lower()
         
         if is_git_bash:
-            click.echo("Detected Git Bash.")
+            console.print("[bold cyan]➜ Detected Git Bash.[/bold cyan]")
             _append_config_block(bashrc, BASH_CONFIG, "Git Bash")
         else:
-            click.echo("Detected Windows System.")
+            console.print("[bold cyan]➜ Detected Windows System.[/bold cyan]")
             # Configure PowerShell
             _setup_powershell()
             return
@@ -157,19 +165,19 @@ def setup_cmd(force):
         shell_env = os.environ.get("SHELL", "")
         
         if "zsh" in shell_env:
-            click.echo("Detected Zsh.")
+            console.print("[bold cyan]➜ Detected Zsh.[/bold cyan]")
             _append_config_block(zshrc, ZSH_CONFIG, "Zsh")
         elif "bash" in shell_env:
-            click.echo("Detected Bash.")
+            console.print("[bold cyan]➜ Detected Bash.[/bold cyan]")
             _append_config_block(bashrc, BASH_CONFIG, "Bash")
         else:
             # Fallback: Check files existence if ENV is ambiguous
             if zshrc.exists():
-                click.echo("Found .zshrc, configuring Zsh...")
+                console.print("[dim]Found .zshrc, configuring Zsh...[/dim]")
                 _append_config_block(zshrc, ZSH_CONFIG, "Zsh")
             elif bashrc.exists():
-                click.echo("Found .bashrc, configuring Bash...")
+                console.print("[dim]Found .bashrc, configuring Bash...[/dim]")
                 _append_config_block(bashrc, BASH_CONFIG, "Bash")
             else:
-                click.echo("Could not auto-detect shell config file.")
-                click.echo("Run 'cwm setup --force' to choose manually.")
+                console.print("[yellow]! Could not auto-detect shell config file.[/yellow]")
+                console.print("  Run [bold]cwm setup --force[/bold] to choose manually.")

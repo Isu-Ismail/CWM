@@ -1,4 +1,3 @@
-# src/cwm/group_cmd.py
 import click
 from .storage_manager import StorageManager
 
@@ -13,7 +12,7 @@ def group_cmd():
 def add_group():
     """
     Interactively create a project group with pagination.
-    
+
     Now creates 'Healable' links: {"id": 1, "verify": "alias"}
     """
     manager = StorageManager()
@@ -27,22 +26,21 @@ def add_group():
     groups = data.get("groups", [])
     last_group_id = data.get("last_group_id", 0)
 
-    # Sort by ID for display
     sorted_projs = sorted(projects, key=lambda x: x["id"])
     page_size = 10
     index = 0
     selected_ids = None
 
-    # --- 1. Pagination & Selection Loop ---
     while True:
         end_index = min(index + page_size, len(sorted_projs))
-        click.echo(f"\n--- Projects ({index + 1}–{end_index} of {len(sorted_projs)}) ---")
-        
+        click.echo(
+            f"\n--- Projects ({index + 1}–{end_index} of {len(sorted_projs)}) ---")
+
         for p in sorted_projs[index:end_index]:
             grp = p.get("group")
             grp_label = f"(group: {grp})" if grp else ""
-            # Display ID, Alias, Path
-            click.echo(f"[{p['id']}] {p['alias']:<20} : {p['path']} {grp_label}")
+            click.echo(
+                f"[{p['id']}] {p['alias']:<20} : {p['path']} {grp_label}")
 
         user_input = click.prompt(
             "\nEnter project IDs to group (comma-separated), "
@@ -72,7 +70,8 @@ def add_group():
         valid_ids = {p["id"] for p in projects}
         invalid = [i for i in ids if i not in valid_ids]
         if invalid:
-            click.echo("Invalid project IDs: " + ", ".join(str(i) for i in invalid))
+            click.echo("Invalid project IDs: " + ", ".join(str(i)
+                       for i in invalid))
             continue
 
         selected_ids = ids
@@ -82,14 +81,8 @@ def add_group():
         click.echo("No projects selected.")
         return
 
-    
-    
-
-    # --- 2. Build the Healable List ---
-    # We need to map IDs to Aliases to create the verify key
     new_group_items = []
-    
-    # Create a lookup for fast access
+
     proj_lookup = {p["id"]: p for p in projects}
 
     for pid in selected_ids:
@@ -99,21 +92,17 @@ def add_group():
             "verify": proj["alias"]  # The anchor for self-healing
         })
 
-    # --- 3. Check for Duplicates ---
-    # We need to compare the SET of IDs to existing groups
     new_id_set = set(selected_ids)
 
     for g in groups:
-        # Extract IDs from the existing group's object list
-        # Handling both old format (list of ints) and new format (list of dicts) just in case
         existing_items = g.get("project_list", [])
         existing_ids = set()
-        
+
         for item in existing_items:
             if isinstance(item, dict):
                 existing_ids.add(item.get("id"))
             else:
-                existing_ids.add(item) # fallback for old data
+                existing_ids.add(item)  # fallback for old data
 
         if existing_ids == new_id_set:
             click.echo(
@@ -122,7 +111,6 @@ def add_group():
             )
             return
 
-    # --- 4. Get Alias & Save ---
     new_group_id = last_group_id + 1
     existing_aliases = {g["alias"] for g in groups}
     default_alias = f"group{new_group_id}"
@@ -135,19 +123,18 @@ def add_group():
             click.echo("Alias cannot be empty.")
             continue
         if group_alias in existing_aliases:
-            click.echo(f"Alias '{group_alias}' already exists. Choose another.")
+            click.echo(
+                f"Alias '{group_alias}' already exists. Choose another.")
             continue
         break
 
     new_group = {
         "id": new_group_id,
         "alias": group_alias,
-        "project_list": new_group_items, # Using the new structure
+        "project_list": new_group_items,  # Using the new structure
     }
     groups.append(new_group)
 
-    # Optional: Update the project's own 'group' field to point to this new group
-    # (Note: This overwrites previous group assignments for these projects)
     for p in projects:
         if p["id"] in selected_ids:
             p["group"] = new_group_id
@@ -155,14 +142,13 @@ def add_group():
     data["groups"] = groups
     data["last_group_id"] = new_group_id
     data["projects"] = projects
-    
+
     manager.save_projects(data)
 
     click.echo(
         f"Created group '{group_alias}' (id={new_group_id}) "
         f"with projects: {', '.join(str(i) for i in selected_ids)}"
     )
-
 
 
 @group_cmd.command("list")
@@ -183,25 +169,19 @@ def list_groups():
     proj_by_id = {p["id"]: p for p in projects}
 
     for g in sorted(groups, key=lambda x: x["id"]):
-        # 1. FIX KEY: Use "project_list" (singular)
-        group_items = g.get("project_list", []) 
-        
-        # 2. Extract IDs from the list of dictionaries
+        group_items = g.get("project_list", [])
+
         project_ids = []
         for item in group_items:
-            # Handle both new (dict) and old (int) formats for robustness
             if isinstance(item, dict):
                 project_ids.append(item.get("id"))
             else:
-                project_ids.append(item) # fallback for old int list
-        
-        # Now count the actual unique project IDs
+                project_ids.append(item)  # fallback for old int list
+
         count = len(project_ids)
 
         aliases = []
-        # 3. Use the extracted integer IDs for lookup
         for pid in project_ids[:3]:
-            # Ensure pid is an integer before lookup
             if isinstance(pid, int):
                 p = proj_by_id.get(pid)
                 if p:
@@ -214,8 +194,8 @@ def list_groups():
         else:
             preview = "no projects"
 
-        click.echo(f"[{g['id']}] {g['alias']}  => {count} projects  ({preview})")
-
+        click.echo(
+            f"[{g['id']}] {g['alias']}  => {count} projects  ({preview})")
 
 
 @group_cmd.command("delete")
@@ -235,9 +215,9 @@ def delete_group(group_id):
         click.echo("No groups exist.")
         return
 
-    # Direct delete: cwm group delete --id 3
     if group_id is not None:
-        idx = next((i for i, g in enumerate(groups) if g["id"] == group_id), None)
+        idx = next((i for i, g in enumerate(groups)
+                   if g["id"] == group_id), None)
         if idx is None:
             click.echo(f"Group ID {group_id} not found.")
             return
@@ -252,10 +232,10 @@ def delete_group(group_id):
         _reindex_groups_and_save(manager, data, groups, projects)
         return
 
-    # Interactive
     click.echo("\n--- Groups ---")
     for g in sorted(groups, key=lambda x: x["id"]):
-        click.echo(f"[{g['id']}] {g['alias']}  →  {len(g.get('project_ids', []))} projects")
+        click.echo(
+            f"[{g['id']}] {g['alias']}  →  {len(g.get('project_ids', []))} projects")
 
     user_input = click.prompt(
         "\nEnter group ID to DELETE (or press Enter to cancel)",
@@ -323,11 +303,6 @@ def _reindex_groups_and_save(manager, data, groups, projects):
     click.echo("Re-indexed group IDs.")
 
 
-
-
-
-
-
 @group_cmd.command("edit")
 @click.option("-id", "group_id", type=int, help="Group ID to edit.")
 @click.option("-n", "--name", "new_alias", help="New alias for the group.")
@@ -369,9 +344,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
 
     valid_project_ids = {p["id"] for p in projects}
 
-    # -------------------------
-    # Choose group (wizard if id not provided)
-    # -------------------------
     if group_id is None:
         click.echo("--- Groups ---")
         for g in sorted(groups, key=lambda x: x["id"]):
@@ -392,18 +364,16 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
     old_alias = group.get("alias", "")
     old_ids = list(group.get("project_ids", []))
 
-    # -------------------------
-    # POWER MODE
-    # -------------------------
     if new_alias or add_ids or remove_ids:
         new_ids = set(old_ids)
 
-        # validate add/remove IDs
         invalid_add = [pid for pid in add_ids if pid not in valid_project_ids]
-        invalid_remove = [pid for pid in remove_ids if pid not in valid_project_ids]
+        invalid_remove = [
+            pid for pid in remove_ids if pid not in valid_project_ids]
         if invalid_add:
             click.echo(
-                "Invalid project IDs to add: " + ", ".join(str(i) for i in invalid_add)
+                "Invalid project IDs to add: " +
+                ", ".join(str(i) for i in invalid_add)
             )
             return
         if invalid_remove:
@@ -421,17 +391,14 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
 
         new_list = sorted(new_ids)
 
-        # must have at least 2
         if len(new_list) < 2:
             click.echo("A group must contain at least 2 projects.")
             return
 
-        # prevent duplicates within group
         if len(new_list) != len(set(new_list)):
             click.echo("Duplicate project IDs detected in group.")
             return
 
-        # prevent duplicate composition with other groups
         new_set = set(new_list)
         for g in groups:
             if g["id"] != group_id and set(g.get("project_ids", [])) == new_set:
@@ -441,7 +408,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
                 )
                 return
 
-        # alias handling
         final_alias = old_alias
         if new_alias:
             candidate = new_alias.strip()
@@ -454,11 +420,9 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
                 return
             final_alias = candidate
 
-        # apply
         group["alias"] = final_alias
         group["project_ids"] = new_list
 
-        # update project.group mappings
         old_set = set(old_ids)
         for p in projects:
             pid = p["id"]
@@ -476,9 +440,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
         click.echo("Projects: " + ", ".join(str(i) for i in new_list))
         return
 
-    # -------------------------
-    # WIZARD MODE
-    # -------------------------
     click.echo(f"\n--- Editing Group {group_id} ---")
     click.echo(f"Alias: {old_alias}")
     click.echo(
@@ -486,7 +447,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
         + (", ".join(str(i) for i in old_ids) if old_ids else "(none)")
     )
 
-    # show all projects with mark
     click.echo("\n--- All Projects ---")
     current_set = set(old_ids)
     for p in sorted(projects, key=lambda x: x["id"]):
@@ -501,7 +461,8 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
         "  -3,-4       → remove projects\n"
     )
 
-    user_input = click.prompt("Projects", default="", show_default=False).strip()
+    user_input = click.prompt("Projects", default="",
+                              show_default=False).strip()
     new_ids = list(old_ids)
 
     if user_input:
@@ -511,7 +472,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
         )
 
         if replace_mode:
-            # completely replace
             new_ids = []
             for t in tokens:
                 try:
@@ -520,7 +480,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
                 except ValueError:
                     click.echo(f"Ignoring invalid ID: {t}")
         else:
-            # incremental add/remove
             current = set(old_ids)
             for t in tokens:
                 if t.startswith("+"):
@@ -537,10 +496,10 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
                         click.echo(f"Ignoring invalid token: {t}")
             new_ids = sorted(current)
 
-    # validations
     invalid = [pid for pid in new_ids if pid not in valid_project_ids]
     if invalid:
-        click.echo("Invalid project IDs: " + ", ".join(str(i) for i in invalid))
+        click.echo("Invalid project IDs: " + ", ".join(str(i)
+                   for i in invalid))
         return
 
     if len(new_ids) < 2:
@@ -560,7 +519,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
             )
             return
 
-    # alias
     alias_input = click.prompt(
         "Alias", default=old_alias, show_default=True
     ).strip()
@@ -574,7 +532,6 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
             return
         final_alias = alias_input
 
-    # apply
     group["alias"] = final_alias
     group["project_ids"] = new_ids
 
@@ -593,6 +550,4 @@ def edit_group(group_id, new_alias, add_ids, remove_ids):
     click.echo("\nGroup updated successfully.")
     click.echo(f"Alias: {final_alias}")
     click.echo("Projects: " + ", ".join(str(i) for i in new_ids))
-
-
 
