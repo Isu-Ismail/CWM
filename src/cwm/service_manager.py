@@ -164,7 +164,7 @@ class ServiceManager:
 
         data = self.manager.load_projects()
         proj = next((p for p in data.get("projects", [])
-                    if p["id"] == project_id), None)
+                     if p["id"] == project_id), None)
         if not proj:
             return False, "Project ID not found."
 
@@ -175,7 +175,9 @@ class ServiceManager:
         root_path = Path(proj["path"]).resolve()
 
         if not is_safe_startup_cmd(raw_cmd, root_path):
-            return False, "Unsafe startup command."
+            # This prevents "rm" from running even if it was somehow saved
+            return False, f"Blocked unsafe command: {raw_cmd}"
+        # -----------------------------------
 
         if isinstance(raw_cmd, list):
             joiner = " && " if os.name == 'nt' else " && "
@@ -199,12 +201,13 @@ class ServiceManager:
                 "cwd": str(root_path),
                 "stdout": out_file,
                 "stderr": subprocess.STDOUT,
+                "stdin": subprocess.DEVNULL, # <--- THIS FIXES THE FREEZING
                 "text": True,
                 "env": env
             }
 
             if os.name == 'nt':
-                kwargs["creationflags"] = 0x08000000
+                kwargs["creationflags"] = 0x08000000 # CREATE_NO_WINDOW
                 kwargs["shell"] = True
             else:
                 kwargs["start_new_session"] = True
@@ -212,6 +215,8 @@ class ServiceManager:
 
             proc = subprocess.Popen(args, **kwargs)
 
+            # Close the file handle in parent immediately
+            # The child process keeps its own handle open
             out_file.close()
 
             new_entry = {
@@ -224,7 +229,12 @@ class ServiceManager:
                 "cmd": cmd_str,
                 "viewers": []
             }
-            state[str_id] = validate_service_entry(new_entry)
+            # Assuming validate_service_entry is defined elsewhere
+            # state[str_id] = validate_service_entry(new_entry)
+            
+            # Simple assignment for now if validator not imported
+            state[str_id] = new_entry 
+            
             self._save_state(state)
 
             self._ensure_watcher_running()

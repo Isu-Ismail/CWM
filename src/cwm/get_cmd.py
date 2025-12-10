@@ -150,7 +150,7 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
         return
 
     try:
-        choice = click.prompt("Copy #", default="", show_default=False)
+        choice = click.prompt("Copy (ID) ", default="", show_default=False)
         if not choice:
             return
         if choice in display_map:

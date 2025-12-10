@@ -78,14 +78,14 @@ def stop():
     console.print(f"Stopping watch for shell: [cyan]{shell_type}[/cyan]")
 
     remove_hook(shell_type)
-    console.print("✔ Shell hook removed from profile.")
+    console.print("[green]✔ Shell hook removed from profile.[/green]")
 
     if hook_file_str:
         hook_path = Path(hook_file_str)
         if hook_path.exists():
             hook_path.unlink()
             console.print(
-                f"✔ Deleted local hook file: [dim]{hook_path.name}[/dim]")
+                f"[green]✔ Deleted local hook file:[/gree] [dim]{hook_path.name}[/dim]")
 
     manager.save_watch_session({"isWatching": False})
 

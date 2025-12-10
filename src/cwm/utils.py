@@ -6,8 +6,9 @@ import click
 from typing import Tuple
 import re
 
-
+GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 CWM_BANK_NAME = ".cwm"
+
 
 DEFAULT_AI_INSTRUCTION = """You are DevBot, a senior developer's assistant. Follow these rules:
 *if user aks hello reply hello how can i help you today like this polite and simple.
@@ -66,58 +67,84 @@ def looks_invalid_command(cmd: str) -> bool:
     return False
 
 
+
+
 def _ensure_dir(path: Path):
     if not path.exists():
         path.mkdir(parents=True, exist_ok=True)
 
-
 def make_hidden(path: Path):
-    """
-    Sets the 'Hidden' attribute on Windows.
-    Safe to call repeatedly on folders or files.
-    """
-    if os.name == 'nt':
+    """Hide folder on Windows."""
+    if platform.system() == "Windows":
         try:
             import ctypes
-            ret = ctypes.windll.kernel32.SetFileAttributesW(
-                str(path), FILE_ATTRIBUTE_HIDDEN)
-        except Exception:
+            FILE_ATTRIBUTE_HIDDEN = 0x02
+            ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_HIDDEN)
+        except:
             pass
-
 
 def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
     """
-    Creates the CWM bank structure and ensures it is HIDDEN.
-    Works for both Global (AppData) and Local (.cwm) banks.
+    Creates CWM bank.
+    - If GLOBAL: Creates data/, saved_cmds.json, projects.json, config.json.
+    - If LOCAL: Creates ONLY .cwm/ folder and watch_session.json.
     """
     try:
         _ensure_dir(folder_path)
-
         make_hidden(folder_path)
 
-        data_path = folder_path / "data"
-        backup_path = data_path / "backup"
+        is_global = (folder_path == GLOBAL_CWM_BANK)
 
-        _ensure_dir(data_path)
-        _ensure_dir(backup_path)
+        # --- GLOBAL BANK SETUP ---
+        if is_global:
+            data_path = folder_path / "data"
+            backup_path = data_path / "backup"
+            
+            _ensure_dir(data_path)
+            _ensure_dir(backup_path)
 
-        required_files = {
-            "saved_cmds.json": {"last_saved_id": 0, "commands": []},
-            "history.json": {"last_sync_id": 0, "commands": []},
-        }
+            # Files required ONLY in Global Bank
+            required_files = {
+                "saved_cmds.json": {"last_saved_id": 0, "commands": []},
+                "fav_cmds.json": [],
+                "projects.json": {"last_id": 0, "last_group_id": 0, "projects": [], "groups": []},
+            }
 
-        config_file = folder_path / "config.json"
-        if not config_file.exists():
-            config_file.write_text("{}")
+            # Global Config
+            config_file = folder_path / "config.json"
+            if not config_file.exists():
+                config_file.write_text("{}")
 
-        for fname, default_value in required_files.items():
-            file = data_path / fname
-            if not file.exists():
-                file.write_text(json.dumps(default_value, indent=2))
-                if repair:
-                    click.echo(f"{fname} missing... recreated.")
+            # Create Data Files
+            for fname, default_value in required_files.items():
+                file = data_path / fname
+                if not file.exists():
+                    file.write_text(json.dumps(default_value, indent=4))
+                    if repair:
+                        click.echo(f"Global file {fname} restored.")
+
+       
+        else:
+      
+            pass 
+
+        
+        if is_global:
+            ws_file = folder_path / "data" / "watch_session.json"
+        else:
+            ws_file = folder_path / "watch_session.json"
+
+        if not ws_file.exists():
+            default_session = {
+                "isWatching": False,
+                "shell":"",
+                "hook_file":"",
+                "started_at":None
+            }
+            ws_file.write_text(json.dumps(default_session, indent=4))
 
         return True
+
     except Exception as e:
         click.echo(f"Error creating CWM folder: {e}", err=True)
         return False
@@ -372,3 +399,70 @@ def get_clear_history_command() -> str:
         return f"cat /dev/null > {path} && history -c"
 
 
+
+BANNED_EXECUTABLES = {
+    "rm", "del", "rd", "rmdir", "format", "fdisk", "mkfs", "sudo", "su"
+}
+
+DANGER_SUBSTRINGS = [
+    ":(){ :|:& };:", # Fork bomb
+    "> /dev/sda",    # Disk overwrite attempts
+    "cwm ",          # Prevent recursion
+]
+
+def is_safe_startup_cmd(cmd_input, project_root: Path = None) -> bool:
+    """
+    Validator for startup commands.
+    Blocks dangerous executables and specific patterns.
+    """
+    if not cmd_input:
+        return False
+
+    cmds_to_check = []
+    if isinstance(cmd_input, list):
+        cmds_to_check = cmd_input
+    else:
+        cmds_to_check = [str(cmd_input)]
+
+    for cmd in cmds_to_check:
+        # CRITICAL FIX: Strip whitespace AND quotes before validation
+        cmd = cmd.strip().strip('"').strip("'")
+        
+        if not cmd: continue
+        
+        cmd_lower = cmd.lower()
+
+        # 1. Check Substrings
+        if any(bad in cmd_lower for bad in DANGER_SUBSTRINGS):
+            return False
+
+        # 2. Tokenize to check the Executable (First word)
+        parts = cmd.split()
+        if not parts: continue
+        
+        executable = parts[0].lower()
+        
+        # Check against banned list
+        if executable in BANNED_EXECUTABLES:
+            return False
+
+        # 3. Specific Python Safety Checks (if root provided)
+        if project_root and len(parts) > 1 and executable in ("python", "python3", "py"):
+            script = parts[1]
+            if not script.startswith("-"):
+                try:
+                    root_abs = project_root.resolve()
+                    # Basic directory traversal check
+                    if ".." in script:
+                        return False
+                except:
+                    pass
+
+    return True
+
+
+def clean_token(text: str) -> str:
+    """Removes whitespace and surrounding quotes."""
+    if not text: return ""
+    # Strip whitespace, then double quotes, then single quotes
+    return text.strip().strip('"').strip("'")

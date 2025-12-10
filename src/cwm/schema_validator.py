@@ -169,10 +169,10 @@ SCHEMAS = {
     },
 
     "watch_session.json": {
-        "isWatching": bool,
-        "shell": str,
-        "hook_file": str,
-        "started_at": (str, int),  # Fixed syntax from 'str or int'
+        "isWatching": None or bool,
+        "shell": None or str,
+        "hook_file": None or str,
+        "started_at": None or (str, int),  # Fixed syntax from 'str or int'
     },
 
     "config.json": {

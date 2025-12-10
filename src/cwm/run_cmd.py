@@ -1,18 +1,26 @@
-# src/cwm/run_cmd.py
 import click
 import time
 import sys
 import os
 import shutil
 import subprocess
+
+# Rich Imports
+from rich.console import Console
+from rich.table import Table
+from rich.prompt import Prompt
+
 from .storage_manager import StorageManager
 from .service_manager import ServiceManager
+from .rich_help import RichHelpGroup, RichHelpCommand
 
+# Initialize Console
+console = Console()
 
 def _require_gui_deps():
     if ServiceManager is None:
-        click.echo("Error: Missing dependencies.")
-        click.echo("Run: pip install cwm-cli[gui]")
+        console.print("[red]✖ Error: Missing dependencies.[/red]")
+        console.print("  Run: [bold]pip install cwm-cli[gui][/bold]")
         return False
     return True
 
@@ -40,35 +48,43 @@ def _resolve_group_id(token, groups):
 
 def _launch_detached_gui():
     """
-    Launches the GUI silently (no black window).
+    Launches the GUI silently (no black window) and COMPLETELY DETACHED.
+    Redirects stdout/stderr to DEVNULL so the terminal doesn't hang.
     """
     args = [sys.executable, "-m", "cwm.cli", "run", "_gui-internal"]
     is_windows = os.name == 'nt'
     
     try:
-        if is_windows:
-            subprocess.Popen(args, creationflags=0x08000000)
+        # FIX: Redirect all streams to DEVNULL to prevent terminal freezing
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
 
+        if is_windows:
+            # CREATE_NO_WINDOW = 0x08000000
+            subprocess.Popen(args, creationflags=0x08000000, **kwargs)
         else:
             if sys.platform == "darwin":
+                # Mac specific open command
                 cmd_str = f"'{sys.executable}' -m cwm.cli run _gui-internal"
                 subprocess.Popen(["open", "-a", "Terminal", cmd_str])
             else:
-                # Linux logic
-                subprocess.Popen(args, start_new_session=True)
+                # Linux: start_new_session=True acts like setsid
+                subprocess.Popen(args, start_new_session=True, **kwargs)
         
-        click.echo("Launching Dashboard...")
+        console.print("[green]✔ Launching Dashboard...[/green]")
     except Exception as e:
-        click.echo(f"Failed to launch GUI: {e}")
+        console.print(f"[red]✖ Failed to launch GUI: {e}[/red]")
 
 
-
-@click.group("run")
+@click.group("run", cls=RichHelpGroup)
 def run_cmd():
     """Orchestrate background processes."""
     pass
 
-@run_cmd.command("project",help="Run a single project in background")
+@run_cmd.command("project", cls=RichHelpCommand, help="Run a single project in background")
 @click.argument("target", required=False)
 def run_project(target):
     if not _require_gui_deps(): return
@@ -77,34 +93,56 @@ def run_project(target):
     projects = data.get("projects", [])
 
     if not projects:
-        click.echo("No projects saved.")
+        console.print("[dim]No projects saved.[/dim]")
         return
 
     if not target:
-        click.echo("--- Available Projects ---")
-        for p in sorted(projects, key=lambda x: x["id"]):
-            click.echo(f"[{p['id']}] {p['alias']:<20} : {p.get('startup_cmd', '-')}")
+        console.print("\n[bold]Available Projects[/bold]")
+        table = Table(box=None, show_header=False, padding=(0, 2))
         
-        target = click.prompt("Select Project ID/Alias", default="", show_default=False)
+        for p in sorted(projects, key=lambda x: x["id"]):
+            cmd_prev = p.get('startup_cmd', '-') or "-"
+            if len(cmd_prev) > 30: cmd_prev = cmd_prev[:27] + "..."
+            
+            table.add_row(
+                f"[cyan][{p['id']}][/cyan]", 
+                f"[bold white]{p['alias']}[/bold white]", 
+                f"[dim]{cmd_prev}[/dim]"
+            )
+        
+        console.print(table)
+        console.print("")
+        target = Prompt.ask("  [bold cyan]?[/bold cyan] Select Project ID/Alias", default="", show_default=False)
         if not target: return
 
     pid = _resolve_project_id(target, projects)
     if pid is None:
-        click.echo(f"Project '{target}' not found.")
+        console.print(f"[red]✖ Project '{target}' not found.[/red]")
+        return
+
+    
+    # --- STARTUP CHECK ---
+    project = next(p for p in projects if p["id"] == pid)
+    if not project.get("startup_cmd"):
+        console.print(f"[red]✖ Error: Project '{project['alias']}' has no startup command.[/red]")
+        console.print(f"  [dim]Run 'cwm project edit -id {pid}' to add one.[/dim]")
         return
 
     svc = ServiceManager()
     success, msg = svc.start_project(pid)
-    if success: click.echo(f"✔ {msg}")
-    else: click.echo(f"✘ Failed: {msg}")
+    
+    if success: 
+        console.print(f"[green]✔ {msg}[/green]")
+    else: 
+        console.print(f"[red]✖ Failed: {msg}[/red]")
 
 
-@run_cmd.command("gui")
+@run_cmd.command("gui", cls=RichHelpCommand)
 def launch_gui_detached():
     """Public command to launch the dashboard."""
     _launch_detached_gui()
 
-@run_cmd.command("group",help="Run group of projects")
+@run_cmd.command("group", cls=RichHelpCommand, help="Run group of projects")
 @click.argument("target", required=False)
 def run_group(target):
     if not _require_gui_deps(): return
@@ -114,40 +152,69 @@ def run_group(target):
     projects = data.get("projects", [])
     
     if not groups:
-        click.echo("No groups found.")
+        console.print("[dim]No groups found.[/dim]")
         return
 
     if not target:
-        click.echo("--- Available Groups ---")
-        for g in sorted(groups, key=lambda x: x["id"]):
-            # Use the correct key: "project_list"
-            count = len(g.get("project_list", [])) 
-            click.echo(f"[{g['id']}] {g['alias']:<20} ({count} projects)")
+        console.print("\n[bold]Available Groups[/bold]")
+        table = Table(box=None, show_header=False, padding=(0, 2))
         
-        target = click.prompt("Select Group ID/Alias", default="", show_default=False)
+        for g in sorted(groups, key=lambda x: x["id"]):
+            count = len(g.get("project_list", [])) 
+            table.add_row(
+                f"[cyan][{g['id']}][/cyan]", 
+                f"[bold white]{g['alias']}[/bold white]", 
+                f"[dim]({count} projects)[/dim]"
+            )
+        
+        console.print(table)
+        console.print("")
+        target = Prompt.ask("  [bold cyan]?[/bold cyan] Select Group ID/Alias", default="", show_default=False)
         if not target: return
 
     gid = _resolve_group_id(target, groups)
     if not gid:
-        click.echo(f"Group '{target}' not found.")
+        console.print(f"[red]✖ Group '{target}' not found.[/red]")
         return
         
     group = next(g for g in groups if g["id"] == gid)
-    pids = group.get("project_ids", [])
     
+    # Extract IDs from project_list
+    pids = []
+    for item in group.get("project_list", []):
+        if isinstance(item, dict): pids.append(item.get("id"))
+        else: pids.append(item)
+
     if not pids:
-        click.echo("Group is empty.")
+        console.print("[yellow]! Group is empty.[/yellow]")
+        return
+
+    # --- PRE-VALIDATION CHECK ---
+    missing_cmds = []
+    for pid in pids:
+        proj = next((p for p in projects if p['id'] == pid), None)
+        if proj and not proj.get("startup_cmd"):
+            missing_cmds.append(proj['alias'])
+
+    if missing_cmds:
+        console.print(f"[bold red]✖ Aborted: The following projects have no startup command:[/bold red]")
+        for alias in missing_cmds:
+            console.print(f"  - [red]{alias}[/red]")
         return
 
     svc = ServiceManager()
-    click.echo(f"Starting group '{group['alias']}'...")
+    console.print(f"\n[bold]Starting group '{group['alias']}'...[/bold]")
+    
     for pid in pids:
         p_alias = next((p['alias'] for p in projects if p['id'] == pid), str(pid))
         success, msg = svc.start_project(pid)
-        icon = "✔" if success else "✘"
-        click.echo(f"  {icon} {p_alias:<15}: {msg}")
+        if success:
+            console.print(f"  [green]✔[/green] {p_alias:<15}: {msg}")
+        else:
+            console.print(f"  [red]✘[/red] {p_alias:<15}: {msg}")
+    console.print("")
 
-@run_cmd.command("stop",help="stop the bg process but state is maintained")
+@run_cmd.command("stop", cls=RichHelpCommand, help="Stop bg process but maintain state")
 @click.argument("target", required=False)
 @click.option("--all", is_flag=True, help="Stop ALL running services.")
 def stop_service(target, all):
@@ -156,7 +223,7 @@ def stop_service(target, all):
     
     if all:
         count = svc.stop_all()
-        click.echo(f"Stopped {count} services.")
+        console.print(f"[green]✔ Stopped {count} services.[/green]")
         return
 
     if not target:
@@ -164,53 +231,58 @@ def stop_service(target, all):
         running_items = {k: v for k, v in active.items() if v["status"] == "running"}
         
         if not running_items:
-            click.echo("No services are currently running.")
+            console.print("[yellow]! No services are currently running.[/yellow]")
             return
 
-        click.echo("--- Running Services ---")
+        console.print("\n[bold]Running Services[/bold]")
+        table = Table(box=None, show_header=False, padding=(0, 2))
         for info in running_items.values():
-             click.echo(f"[{info['project_id']}] {info['alias']}")
+             table.add_row(f"[cyan][{info['project_id']}][/cyan]", info['alias'])
+        console.print(table)
+        console.print("")
         
-        target = click.prompt("Select ID/Alias to stop", default="", show_default=False)
+        target = Prompt.ask("  [bold cyan]?[/bold cyan] Select ID/Alias to stop", default="", show_default=False)
         if not target: return
 
     manager = StorageManager()
     pid = _resolve_project_id(target, manager.load_projects().get("projects", []))
     
     if not pid:
-        click.echo("Project not found.")
+        console.print("[red]✖ Project not found.[/red]")
         return
 
     success, msg = svc.stop_project(pid)
-    if success: click.echo(f"✔ {msg}")
-    else: click.echo(f"✘ {msg}")
+    if success: console.print(f"[green]✔ {msg}[/green]")
+    else: console.print(f"[red]✘ {msg}[/red]")
 
-@run_cmd.command("remove",help="remove the project from the status tracker")
+@run_cmd.command("remove", cls=RichHelpCommand, help="Remove project from status tracker")
 @click.argument("target", required=False) 
 def remove_service(target):
     """
     Stop AND remove service(s) from the Orchestrator list.
-    Accepts single ID (1) or comma-separated list (1,2).
     """
     if not _require_gui_deps(): return
     svc = ServiceManager()
     manager = StorageManager()
     
-    # --- 1. Interactive Mode ---
     if not target:
         state = svc.get_services_status()
         if not state:
-            click.echo("Orchestrator list is empty.")
+            console.print("[dim]Orchestrator list is empty.[/dim]")
             return
-        click.echo("--- Orchestrator List ---")
+        
+        console.print("\n[bold]Orchestrator List[/bold]")
+        table = Table(box=None, show_header=False, padding=(0, 2))
         for info in state.values():
             status = info.get('status', 'stopped')
-            click.echo(f"[{info['project_id']}] {info['alias']} ({status})")
+            color = "green" if status == "running" else "dim"
+            table.add_row(f"[cyan][{info['project_id']}][/cyan]", info['alias'], f"[{color}]({status})[/{color}]")
+        console.print(table)
+        console.print("")
         
-        target = click.prompt("Select ID(s) to remove (e.g. 1,3)", default="", show_default=False)
+        target = Prompt.ask("  [bold cyan]?[/bold cyan] Select ID(s) to remove", default="", show_default=False)
         if not target: return
 
-    # --- 2. Process Multiple Targets ---
     tokens = [t.strip() for t in str(target).split(',') if t.strip()]
     projects_data = manager.load_projects().get("projects", [])
 
@@ -220,29 +292,33 @@ def remove_service(target):
         pid = _resolve_project_id(token, projects_data)
         
         if not pid:
-            click.echo(f"Project '{token}' not found.")
+            console.print(f"[red]✖ Project '{token}' not found.[/red]")
             continue
 
         project_alias = next((p['alias'] for p in projects_data if p['id'] == pid), f"ID {pid}")
         success, msg = svc.remove_entry(pid)
         
         if success:
-            click.echo(f"Project '{project_alias}' removed.")
+            console.print(f"[green]✔ Project '{project_alias}' removed.[/green]")
         else:
-            click.echo(f"Failed to remove '{project_alias}': {msg}")
+            console.print(f"[red]✖ Failed to remove '{project_alias}': {msg}[/red]")
 
-@run_cmd.command("list",help="list the running processes")
+@run_cmd.command("list", cls=RichHelpCommand, help="List running processes")
 def list_running():
     if not _require_gui_deps(): return
     svc = ServiceManager()
     state = svc.get_services_status()
     
     if not state:
-        click.echo("Orchestrator is empty.")
+        console.print("[dim]Orchestrator is empty.[/dim]")
         return
         
-    click.echo(f"--- Orchestrator Services ({len(state)}) ---")
-    click.echo(f"{'ID':<5} {'Alias':<20} {'Status':<10} {'PID':<8} {'Uptime'}")
+    table = Table(title="Orchestrator Services", border_style="dim", box=None, padding=(0, 2))
+    table.add_column("ID", justify="right", style="cyan")
+    table.add_column("Alias", style="bold white")
+    table.add_column("Status", style="bold")
+    table.add_column("PID", justify="right", style="dim")
+    table.add_column("Uptime", justify="right")
     
     now = time.time()
     sorted_items = sorted(state.items(), key=lambda x: (x[1]['status'] != 'running', x[1]['project_id']))
@@ -250,7 +326,7 @@ def list_running():
     for _, info in sorted_items:
         status = info['status'].upper()
         pid_str = str(info['pid']) if info['pid'] else "-"
-        s_color = "green" if status == "RUNNING" else "red" if status == "ERROR" else "white"
+        s_color = "green" if status == "RUNNING" else "red" if status == "ERROR" else "dim"
         
         uptime_str = "-"
         if status == "RUNNING":
@@ -259,19 +335,21 @@ def list_running():
             h, m = divmod(m, 60)
             uptime_str = f"{h}h {m}m" if h else f"{m}m"
 
-        click.echo(
-            f"{info['project_id']:<5} "
-            f"{info['alias']:<20} "
-            f"{click.style(status, fg=s_color):<10} "
-            f"{pid_str:<8} "
-            f"{uptime_str}"
+        table.add_row(
+            str(info['project_id']),
+            info['alias'],
+            f"[{s_color}]{status}[/{s_color}]",
+            pid_str,
+            uptime_str
         )
+
+    console.print(table)
+    console.print("")
 
 # --- GUI / AGENT COMMANDS ---
 
 @run_cmd.command("_watcher", hidden=True)
 def internal_watcher():
-    """Background process that monitors PIDs. REQUIRED for ServiceManager."""
     if not _require_gui_deps(): return
     try:
         svc = ServiceManager()
@@ -281,22 +359,16 @@ def internal_watcher():
 
 @run_cmd.command("_gui-internal", hidden=True)
 def internal_gui_entry():
-    """Actual entry point for the GUI window."""
     if not _require_gui_deps(): return
     try:
-        # UPDATED: Import the Tkinter version
         from .gui.tk_app import run_gui
         run_gui()
     except Exception as e:
         print(f"GUI Crash: {e}")
         input("Press Enter...")
 
-@run_cmd.command("gui")
-def launch_gui_detached():
-    """command to launch the orchestrator dashboard."""
-    _launch_detached_gui()
-
-@run_cmd.command("logs")
+# --- RAW LOGS (Using click.echo to prevent freezing/colors issues) ---
+@run_cmd.command("logs", cls=RichHelpCommand)
 @click.argument("target")
 @click.option("-f", "--follow", is_flag=True, help="Follow the log output (Ctrl+C to stop).")
 def view_logs(target, follow):
@@ -311,7 +383,7 @@ def view_logs(target, follow):
     pid = _resolve_project_id(target, projects)
     
     if not pid:
-        click.echo(f"Project '{target}' not found.")
+        console.print(f"[red]✖ Project '{target}' not found.[/red]")
         return
 
     # 2. Locate Log File
@@ -319,70 +391,65 @@ def view_logs(target, follow):
     log_path = LOG_DIR / f"{pid}.log"
 
     if not log_path.exists():
-        click.echo(f"No logs found for project {pid}.")
+        console.print(f"[yellow]! No logs found for project {pid}.[/yellow]")
         return
 
-    # 3. Read / Follow
+    # 3. Read / Follow (Use click.echo for safe, raw output)
     try:
         if follow:
-            click.echo(f"--- Following logs for ID {pid} (Ctrl+C to stop) ---")
+            console.print(f"[dim]--- Following logs for ID {pid} (Ctrl+C to stop) ---[/dim]")
             with open(log_path, "r", encoding="utf-8") as f:
-                # PHASE 1: Read existing history
-                # We read everything currently in the file and print it.
+                # Read existing
                 existing_data = f.read()
                 if existing_data:
                     click.echo(existing_data, nl=False)
 
-                # PHASE 2: Watch for new lines (Tail)
+                # Tail
                 while True:
                     line = f.readline()
                     if not line:
-                        time.sleep(0.1) # Wait for new data
+                        time.sleep(0.1) 
                         continue
                     click.echo(line, nl=False)
         else:
             # Static Dump
-            click.echo(f"--- Logs for ID {pid} ---")
+            console.print(f"\n[bold]Logs for ID {pid}[/bold]")
             with open(log_path, "r", encoding="utf-8") as f:
                 click.echo(f.read())
                 
     except KeyboardInterrupt:
-        click.echo("\nStopped.")
+        console.print("\n[dim]Stopped.[/dim]")
     except Exception as e:
-        click.echo(f"Error reading logs: {e}")
+        console.print(f"[red]✖ Error reading logs:[/red] {e}")
 
 
-@run_cmd.command("kill")
+@run_cmd.command("kill", cls=RichHelpCommand)
 def kill_all_processes():
     """
-    EMERGENCY: Force kill all projects and the background watcher.
+    EMERGENCY: Force kill all projects.
     """
     if not _require_gui_deps(): return
     svc = ServiceManager()
     
-    click.echo(click.style("⚠ Initiating Hard Kill Sequence...", fg="yellow"))
+    console.print("\n[bold red]⚠ Initiating Hard Kill Sequence...[/bold red]")
     
-    # Execute Nuke (Now returns a list, not a count)
     killed_items, w_msg = svc.nuke_all()
     
-    # 1. Report Projects
     if killed_items:
-        click.echo(f"✔ Terminated {len(killed_items)} active processes:")
+        console.print(f"  [red]✔ Terminated {len(killed_items)} active processes:[/red]")
         for item in killed_items:
-            # Print each killed item with a bullet point
-            click.echo(click.style(f"   - {item}", fg="red"))
+            console.print(f"    - {item}", style="red")
     else:
-        click.echo("• No active projects found in registry.")
+        console.print("  [dim]• No active projects found.[/dim]")
 
-    # 2. Report Watcher
     if "terminated" in w_msg.lower():
-        click.echo(click.style(f"✔ {w_msg}", fg="red"))
+        console.print(f"  [red]✔ {w_msg}[/red]")
     else:
-        click.echo(f"• {w_msg}")
+        console.print(f"  [dim]• {w_msg}[/dim]")
 
-    click.echo(click.style("✔ System Cleaned.", fg="green", bold=True))
+    console.print("\n[bold green]✔ System Cleaned.[/bold green]\n")
     
-@run_cmd.command("launch")
+@run_cmd.command("launch", cls=RichHelpCommand)
 @click.argument("target", required=False)
 def launch_terminal(target):
     """
@@ -392,87 +459,76 @@ def launch_terminal(target):
     manager = StorageManager()
     svc = ServiceManager()
     
-    # 1. Interactive Selection
     if not target:
         state = svc.get_services_status()
         running = {k:v for k,v in state.items() if v['status'] == 'running'}
         if not running:
-            click.echo("No running projects to view.")
+            console.print("[yellow]! No running projects.[/yellow]")
             return
-        click.echo("--- Running Projects ---")
+            
+        console.print("\n[bold]Running Projects[/bold]")
+        table = Table(box=None, show_header=False, padding=(0, 2))
         for info in running.values():
-            click.echo(f"[{info['project_id']}] {info['alias']}") 
-        target = click.prompt("Select Project ID", default="", show_default=False)
+            table.add_row(f"[cyan][{info['project_id']}][/cyan]", info['alias'])
+        console.print(table)
+        console.print("")
+        target = Prompt.ask("  [bold cyan]?[/bold cyan] Select Project ID", default="", show_default=False)
         if not target: return
 
-    # 2. Resolve ID
     projects = manager.load_projects().get("projects", [])
     pid = _resolve_project_id(target, projects)
     if not pid:
-        click.echo("Project not found.")
+        console.print("[red]✖ Project not found.[/red]")
         return
 
-    # 3. Launch the Monitor Window
     cmd_args = [sys.executable, "-m", "cwm.cli", "run", "logs", "-f", str(pid)]
-    click.echo(f"Launching terminal for Project {pid}...")
+    console.print(f"[bold cyan]➜ Launching terminal for Project {pid}...[/bold cyan]")
 
     try:
         proc = None
-        
         if os.name == 'nt':
             # Windows
-            proc = subprocess.Popen(
-                cmd_args, 
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
+            proc = subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
         else:
-            # Linux/Mac (Logic to detect terminal emulator)
+            # Mac / Linux
             cmd_str = f"{sys.executable} -m cwm.cli run logs -f {pid}"
             if sys.platform == "darwin":
                  proc = subprocess.Popen(["open", "-a", "Terminal", cmd_str])
             elif shutil.which("gnome-terminal"):
                 proc = subprocess.Popen(["gnome-terminal", "--", "bash", "-c", f"{cmd_str}; exec bash"])
         
-
-        # 4. CRITICAL: Register the Viewer PID
         if proc and proc.pid:
             svc.register_viewer(pid, proc.pid)
-            
     except Exception as e:
-        click.echo(f"Failed to launch terminal: {e}")
+        console.print(f"[red]✖ Failed to launch: {e}[/red]")
 
-@run_cmd.command("clean")
+@run_cmd.command("clean", cls=RichHelpCommand)
 def clean_logs():
-    """
-    Attempts to delete all log files.
-    Reports if any files are locked by open windows.
-    """
+    """Attempts to delete all log files."""
     if not _require_gui_deps(): return
     from .service_manager import LOG_DIR
     
     if not LOG_DIR.exists():
-        click.echo("No log directory found.")
+        console.print("[dim]No log directory found.[/dim]")
         return
 
-    click.echo("Cleaning logs...")
+    console.print("[bold cyan]Cleaning logs...[/bold cyan]")
     deleted = 0
     locked = 0
 
     for log_file in LOG_DIR.glob("*.log"):
         try:
-            log_file.unlink() # Delete file
+            log_file.unlink()
             deleted += 1
         except PermissionError:
             locked += 1
-            click.echo(f"⚠ Locked: {log_file.name} (Close open log terminals!)")
+            console.print(f"  [yellow]⚠ Locked:[/yellow] {log_file.name}")
         except Exception as e:
-            click.echo(f"✘ Error {log_file.name}: {e}")
+            console.print(f"  [red]✖ Error {log_file.name}:[/red] {e}")
 
     if deleted > 0:
-        click.echo(f"✔ Deleted {deleted} log files.")
-    
+        console.print(f"[green]✔ Deleted {deleted} log files.[/green]")
     if locked > 0:
-        click.echo(f"\n{locked} files were locked. Please close any 'cwm run launch' windows.")
-        click.echo("Notice:If you cant see any terminal run this 'taskkill /F /IM python.exe'",color="orange")
+        console.print(f"\n[red]! {locked} files locked (Close open terminals).[/red]")
     else:
-        click.echo("✔ All clean.")
+        console.print("[bold green]✔ All clean.[/bold green]")
