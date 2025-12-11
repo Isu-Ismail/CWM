@@ -4,9 +4,10 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
-from rich.prompt import IntPrompt
+from rich.prompt import IntPrompt,Prompt
 from .storage_manager import StorageManager
 from .utils import is_safe_startup_cmd, clean_token
+from .rich_help import RichHelpCommand,RichHelpGroup
 
 console = Console()
 
@@ -67,29 +68,37 @@ def _get_unique_alias(base_name: str, existing_projects: list) -> str:
         new_name = f"{base_name}-{count}"
     return new_name
 
+
 def _prompt_project_details(target_path, projects_list, default_alias=None, pre_startup=None):
     """
-    Shared logic to ask for Alias and Startup Commands.
+    Shared logic to ask for Alias and Startup Commands using Rich styling.
     """
     if not default_alias:
         default_alias = _get_unique_alias(target_path.name, projects_list)
 
-    alias = click.prompt("Enter Project Alias", default=default_alias)
-    alias = _get_unique_alias(alias, projects_list)
+    # 1. Alias Prompt (Modern Style)
+    console.print("") # Add a little spacing
+    alias_input = Prompt.ask(
+        "  [bold cyan]?[/bold cyan] Enter Project Alias", 
+        default=default_alias
+    )
+    alias = _get_unique_alias(alias_input, projects_list)
 
     startup_value = None
 
+    # 2. Startup Command Prompt (Modern Style)
     if pre_startup:
         raw_input = pre_startup
     else:
-        raw_input = click.prompt(
-            "Enter startup command(s) (comma-separated) or blank",
+        raw_input = Prompt.ask(
+            "  [bold cyan]?[/bold cyan] Enter startup command(s) [dim](comma-separated)[/dim]",
             default="",
-            show_default=False,
+            show_default=False
         ).strip()
 
+    # 3. Process & Validate Input
     if raw_input:
-        # FIX: Clean tokens here to remove quotes
+        # Clean tokens to remove quotes
         tokens = [clean_token(t) for t in raw_input.split(",") if t.strip()]
         
         safe_cmds = []
@@ -97,7 +106,7 @@ def _prompt_project_details(target_path, projects_list, default_alias=None, pre_
             if not cmd: continue
             
             if not is_safe_startup_cmd(cmd, target_path):
-                console.print(f"[red]⚠ Unsafe startup command blocked: {cmd}[/red]")
+                console.print(f"  [bold red]⚠ Unsafe startup command blocked:[/bold red] {cmd}")
                 return None, None 
 
             if cmd not in safe_cmds:
@@ -107,19 +116,19 @@ def _prompt_project_details(target_path, projects_list, default_alias=None, pre_
 
     return alias, startup_value
 
-
 # --- COMMANDS ---
 
-@click.group("project")
+@click.group("project",cls=RichHelpGroup)
 def project_cmd():
     """Manage workspace projects."""
     pass
 
-@project_cmd.command("scan")
+@project_cmd.command("scan", cls=RichHelpCommand)
 @click.option("--root", help="Specific folder to scan (defaults to User Home).")
 def scan_projects(root):
     from .project_utils import ProjectScanner
     import time
+    """Auto-detect projects in your User Home directory."""
     
     start_path = Path(root).resolve() if root else Path.home()
     manager = StorageManager()
@@ -134,16 +143,31 @@ def scan_projects(root):
 
     start_time = time.perf_counter()
 
-    with console.status("[bold cyan]Scanning folders...", spinner="dots") as status:
-        for proj_path in scanner.scan_generator():
-            status.update(f"[bold cyan]Scanning... ({scanner.scanned_count} checked)[/bold cyan]")
+    console.print(f"[bold]Starting scan in:[/bold] {start_path}")
+
+    # --- PROGRESS CALLBACK FOR SINGLE LINE UPDATE ---
+    with console.status("[bold cyan]Scanning folders...[/bold cyan]") as status:
+        
+        def progress_update(count, current_path):
+            # Truncate path if too long for clean display
+            path_str = str(current_path)
+            if len(path_str) > 50:
+                path_str = "..." + path_str[-47:]
+            
+            status.update(f"[bold cyan]Scanning... ({count} folders)[/bold cyan] [dim]{path_str}[/dim]")
+
+        # Pass callback to generator
+        for proj_path in scanner.scan_generator(on_progress=progress_update):
             if str(proj_path) in existing_paths:
                 continue
             found_candidates.append(proj_path)
+            # Optional: Flash a message when found without breaking the flow
+            # console.print(f"[green]Found candidate:[/green] {proj_path.name}")
 
     end_time = time.perf_counter()
     duration = end_time - start_time
 
+    # --- SUMMARY & INTERACTIVE ADD ---
     console.print(f"\n[dim]Scan Summary: Checked {scanner.scanned_count} folders in {duration:.2f} seconds.[/dim]")
 
     if not found_candidates:
@@ -165,7 +189,8 @@ def scan_projects(root):
             show_default=False,
         )
 
-        if action == "s": continue
+        if action == "s":
+            continue
         if action == "n":
             scanner.add_to_ignore(str(rel_path))
             console.print(f"[dim]-> Added {rel_path} to ignore list.[/dim]")
@@ -187,6 +212,7 @@ def scan_projects(root):
                 "startup_cmd": startup_cmd,
                 "group": None
             })
+
             added_count += 1
             console.print(f"[green]-> Saved as '{alias}'[/green]")
 
@@ -199,7 +225,7 @@ def scan_projects(root):
         console.print("\n[dim]No projects added.[/dim]")
 
 
-@project_cmd.command("add")
+@project_cmd.command("add", cls=RichHelpCommand)
 @click.argument("path", required=False)
 @click.option("-n", "--name", help="Alias for the project.")
 @click.option("-s", "--startup", help="Startup command(s).")
@@ -208,12 +234,16 @@ def add_project(path, name, startup):
     manager = StorageManager()
 
     if not path:
-        path = click.prompt("Enter Project Path").strip()
+        # Stylish Prompt
+        path = Prompt.ask("  [bold cyan]?[/bold cyan] Project Path").strip()
 
-    target = Path.cwd().resolve() if path == "." else Path(path).resolve()
+    # FIX: Remove surrounding quotes from path input
+    cleaned_path = path.strip().strip('"').strip("'")
+    
+    target = Path.cwd().resolve() if cleaned_path == "." else Path(cleaned_path).resolve()
 
     if not target.exists() or not target.is_dir():
-        console.print(f"[red]Error: Invalid directory '{path}'.[/red]")
+        console.print(f"[red]Error: Invalid directory '{cleaned_path}'.[/red]")
         return
 
     data = manager.load_projects()
@@ -247,10 +277,10 @@ def add_project(path, name, startup):
     data["last_id"] = last_id
     manager.save_projects(data)
 
-    console.print(f"[green]Added project '{alias}' → {target}[/green]")
+    console.print(f"[green]Added project '{alias}' → [/green] [cyan]{target}[/cyan]")
 
 
-@project_cmd.command("list")
+@project_cmd.command("list",cls=RichHelpCommand)
 def list_projects():
     """List all saved projects."""
     manager = StorageManager()
@@ -264,7 +294,7 @@ def list_projects():
         console.print("[dim]No projects saved.[/dim]")
         return
 
-    console.print(f"\n[bold green]📦 Saved Projects ({len(projects)})[/bold green]")
+    console.print(f"\n[bold green]  ▤ Saved Projects ({len(projects)})[/bold green]")
 
     sorted_projs = sorted(projects, key=lambda x: x["id"])
 
@@ -302,7 +332,7 @@ def list_projects():
     console.print("")
 
 
-@project_cmd.command("remove")
+@project_cmd.command("remove", cls=RichHelpCommand)
 @click.argument("target", required=False)
 @click.option("-n", "count", default="10", help="Number of candidates to show.")
 def remove_project(target, count):
@@ -322,15 +352,17 @@ def remove_project(target, count):
 
     removed_something = False
 
-    # --- DIRECT REMOVE ---
+    # --- DIRECT REMOVE (Single Target) ---
     if target:
         found_idx = -1
+        # Try finding by ID
         if target.isdigit():
             tid = int(target)
             for i, p in enumerate(projects):
                 if p["id"] == tid:
                     found_idx = i
                     break
+        # Try finding by Alias
         else:
             for i, p in enumerate(projects):
                 if p["alias"] == target:
@@ -339,41 +371,49 @@ def remove_project(target, count):
 
         if found_idx != -1:
             removed = projects.pop(found_idx)
-            console.print(f"[green]Removed project: {removed['alias']}[/green]")
+            console.print(f"[green]✔ Removed project: [bold]{removed['alias']}[/bold][/green]")
             removed_something = True
         else:
-            console.print(f"[red]Project '{target}' not found.[/red]")
+            console.print(f"[red]✖ Project '{target}' not found.[/red]")
             return
 
-    # --- INTERACTIVE REMOVE ---
+    # --- INTERACTIVE REMOVE (List & Select) ---
     else:
         # Sort by hits (least used first usually, or just ID)
         sorted_projs = sorted(projects, key=lambda x: (x.get("hits", 0), x["alias"]))
         
         limit = 10
-        if str(count).lower() == "all": limit = len(projects)
+        if str(count).lower() == "all": 
+            limit = len(projects)
         else:
             try: limit = int(count)
             except: pass
             
         display_list = sorted_projs[:limit]
         
+        # Table Header
         console.print("\n[bold]Select Projects to Remove[/bold]")
+        
         table = Table(box=None, show_header=False, padding=(0, 2))
+        table.add_column("ID", style="cyan", justify="right")
+        table.add_column("Alias", style="bold white")
+        table.add_column("Path", style="dim")
+
         for p in display_list:
-            table.add_row(f"[cyan][{p['id']}][/cyan]", f"{p['alias']}", f"[dim]{p['path']}[/dim]")
+            table.add_row(f"[{p['id']}]", p['alias'], _shorten_path(p['path']))
         
         console.print(table)
         console.print("")
 
-        choice = click.prompt("\nEnter IDs/Aliases to REMOVE (comma-separated)", default="", show_default=False)
+        # Prompt
+        choice = Prompt.ask("  [bold cyan]?[/bold cyan] Enter IDs/Aliases to REMOVE [dim](comma-separated)[/dim]", default="", show_default=False)
         if not choice: return
 
-        tokens = choice.split(",")
+        tokens = [t.strip() for t in choice.split(",") if t.strip()]
         to_remove_indexes = []
 
+        # Find indexes to remove
         for token in tokens:
-            token = token.strip()
             idx = -1
             if token.isdigit():
                 tid = int(token)
@@ -390,8 +430,11 @@ def remove_project(target, count):
             if idx != -1 and idx not in to_remove_indexes:
                 to_remove_indexes.append(idx)
 
-        if not to_remove_indexes: return
+        if not to_remove_indexes:
+            console.print("[yellow]! No valid projects selected.[/yellow]")
+            return
 
+        # Remove them (reverse order to keep indexes valid)
         to_remove_indexes.sort(reverse=True)
         count_removed = 0
         removed_ids = set()
@@ -399,12 +442,11 @@ def remove_project(target, count):
         for idx in to_remove_indexes:
             removed = projects.pop(idx)
             removed_ids.add(removed["id"])
-            console.print(f"[dim]Removed: {removed['alias']}[/dim]")
+            console.print(f"  [red]✖ Removed:[/red] {removed['alias']}")
             count_removed += 1
 
-        # Clean groups
+        # Clean up references in groups
         for g in groups:
-            # Handle new group structure (list of dicts)
             new_list = []
             for item in g.get("project_list", []):
                 pid = item.get("id") if isinstance(item, dict) else item
@@ -412,11 +454,14 @@ def remove_project(target, count):
                     new_list.append(item)
             g["project_list"] = new_list
 
-        console.print(f"[green]Successfully removed {count_removed} projects.[/green]")
+        console.print(f"\n[bold green]✔ Successfully removed {count_removed} projects.[/bold green]")
         removed_something = True
 
+    # --- RE-INDEXING LOGIC ---
     if removed_something:
         console.print("[dim]Re-indexing project IDs...[/dim]")
+        
+        # Sort by current ID to keep order
         projects.sort(key=lambda x: x["id"])
         
         id_mapping = {}
@@ -432,12 +477,14 @@ def remove_project(target, count):
         for g in groups:
             new_list = []
             for item in g.get("project_list", []):
+                # Handle dict structure
                 if isinstance(item, dict):
                     old_pid = item.get("id")
                     if old_pid in id_mapping:
                         item["id"] = id_mapping[old_pid]
                         new_list.append(item)
-                else: # Legacy int
+                # Handle legacy int structure
+                else: 
                     if item in id_mapping:
                         new_list.append(id_mapping[item])
             g["project_list"] = new_list
@@ -445,11 +492,12 @@ def remove_project(target, count):
         data["groups"] = groups
         data["last_group_id"] = last_group_id
         data["projects"] = projects
+        
         manager.save_projects(data)
         console.print("[dim]Done.[/dim]")
 
 
-@project_cmd.command("edit")
+@project_cmd.command("edit",cls=RichHelpCommand)
 @click.option("-id", "project_id", type=int, help="Project ID to edit.")
 @click.option("-n", "--name", "new_alias", help="New alias for the project.")
 @click.option("-p", "--path", "new_path", help="New path for the project.")

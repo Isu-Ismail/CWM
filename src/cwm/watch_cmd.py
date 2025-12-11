@@ -85,7 +85,7 @@ def stop():
         if hook_path.exists():
             hook_path.unlink()
             console.print(
-                f"[green]✔ Deleted local hook file:[/gree] [dim]{hook_path.name}[/dim]")
+                f"[green]✔ Deleted local hook file:[/green] [dim]{hook_path.name}[/dim]")
 
     manager.save_watch_session({"isWatching": False})
 

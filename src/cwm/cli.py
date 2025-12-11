@@ -12,6 +12,9 @@ from .utils import (
     CWM_BANK_NAME, has_write_permission
 )
 from .rich_help import RichHelpCommand,RichHelpGroup
+from rich.console import Console
+
+console = Console()
 
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 
@@ -155,38 +158,48 @@ def init():
     project_path = current_path / CWM_BANK_NAME
 
     if is_path_literally_inside_bank(current_path):
-        click.echo(f"ERROR: Cannot create a .cwm bank inside another .cwm bank.")
+        console.print(f"[red]ERROR:[/red] Cannot create a .cwm bank inside another .cwm bank.")
         return
 
     if project_path.exists():
         safe_create_cwm_folder(project_path, repair=True)
-        click.echo("A .cwm bank already exists in this project.")
+        console.print("[yellow]A .cwm bank already exists in this project.[/yellow]")
         return
 
     if not has_write_permission(current_path):
-        click.echo("ERROR: You do not have permission to create a CWM bank in this folder.")
+        console.print("[red]ERROR:[/red] You do not have permission to create a CWM bank in this folder.")
         return
 
     ok = safe_create_cwm_folder(project_path, repair=False)
     if ok:
-        click.echo("Initialized empty CWM bank in this project.")
+        console.print("[green]Initialized empty CWM bank in this project.[/green]")
     else:
-        click.echo("CWM initialization failed.")
+        console.print("[red]CWM initialization failed.[/red]")
 
 @cli.command(cls=RichHelpCommand)
 def hello():
     """System diagnostics."""
-    click.echo(f"CWM v{__version__}")
-    click.echo(f"System: {platform.system()} {platform.release()}")
-    hist = get_history_file_path()
-    click.echo(f"History: {hist if hist else 'Not Detected'}")
+    console.print(f"[bold green]CWM v{__version__}[/bold green]")
     
+    # System Info
+    console.print(f"[bold blue]System:[/bold blue]  {platform.system()} {platform.release()}")
+    
+    # History File
+    hist = get_history_file_path()
+    hist_status = f"[white]{hist}[/white]" if hist else "[red]Not Detected[/red]"
+    console.print(f"[bold blue]History:[/bold blue] {hist_status}")
+    
+    # Sync Warning
     if not is_history_sync_enabled():
-        click.echo("Notice: Real-time sync not enabled (Run 'cwm setup' on Linux/Mac).")
+        console.print("[yellow]! Notice: Real-time sync not enabled (Run 'cwm setup' on Linux/Mac).[/yellow]")
         
-    click.echo("")
-    click.echo(f"Documentation: {click.style(DOCS_LINK, fg='blue', underline=True)}")
-    click.echo("Developed by ISU")
+    console.print("")
+    
+    # Documentation Link (Clickable in modern terminals)
+    console.print(f"[bold]Documentation:[/bold] [blue underline link={DOCS_LINK}]{DOCS_LINK}[/blue underline link]")
+    
+    # Footer
+    console.print("[cyan]Developed by ISU[/cyan]")
 
 if __name__ == "__main__":
     cli()

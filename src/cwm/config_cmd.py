@@ -8,15 +8,18 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from rich.prompt import Prompt, IntPrompt
+from rich.prompt import Prompt, IntPrompt, Confirm
 
-from .storage_manager import StorageManager, GLOBAL_CWM_BANK, find_nearest_bank_path
+from .storage_manager import StorageManager, GLOBAL_CWM_BANK
 from .rich_help import RichHelpCommand
 from .utils import get_all_history_candidates
 
 console = Console()
 GLOBAL_CONFIG_PATH = GLOBAL_CWM_BANK / "config.json"
 
+# =========================================================
+# HELPERS (Simplified - Global Only)
+# =========================================================
 def _load_global_config():
     if not GLOBAL_CONFIG_PATH.exists():
         return {}
@@ -30,31 +33,19 @@ def _save_global_config(data):
         GLOBAL_CWM_BANK.mkdir(parents=True, exist_ok=True)
     GLOBAL_CONFIG_PATH.write_text(json.dumps(data, indent=4))
 
-def _write_config(path: Path, key: str, value):
-    if not path.parent.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-    
-    data = {}
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-        except:
-            pass
-    
+def _write_config(key: str, value):
+    data = _load_global_config()
     data[key] = value
-    path.write_text(json.dumps(data, indent=4))
+    _save_global_config(data)
 
-def _clear_config(path: Path):
-    if path and path.exists():
-        path.unlink()
+def _clear_config():
+    if GLOBAL_CONFIG_PATH.exists():
+        GLOBAL_CONFIG_PATH.unlink()
+        # Re-create empty to avoid errors
+        GLOBAL_CONFIG_PATH.write_text("{}")
 
-def _modify_config_list(path: Path, key: str, value: str, action: str):
-    data = {}
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-        except: pass
-        
+def _modify_config_list(key: str, value: str, action: str):
+    data = _load_global_config()
     current_list = data.get(key, [])
     if not isinstance(current_list, list): current_list = []
     
@@ -72,14 +63,15 @@ def _modify_config_list(path: Path, key: str, value: str, action: str):
             console.print(f"  [yellow]! '{value}' not found in {key}.[/yellow]")
             
     data[key] = current_list
-    path.write_text(json.dumps(data, indent=4))
+    _save_global_config(data)
 
 
-@click.command("config", help="Edit configuration settings.", cls=RichHelpCommand)
+# =========================================================
+# MAIN COMMAND
+# =========================================================
+@click.command("config", help="Edit global configuration settings.", cls=RichHelpCommand)
 @click.option("--shell", is_flag=True, help="Select preferred shell history file.")
-@click.option("--global", "global_mode", is_flag=True, help="Target Global config explicitly.")
-@click.option("--clear-local", is_flag=True, help="Reset local configuration.")
-@click.option("--clear-global", is_flag=True, help="Reset global configuration.")
+@click.option("--clear-config", is_flag=True, help="Reset configuration to defaults.")
 @click.option("--show", is_flag=True, help="Show configuration.")
 @click.option("--editor", help="Set default editor.")
 @click.option("--code-theme", help="Set code syntax highlighting theme.")
@@ -89,82 +81,71 @@ def _modify_config_list(path: Path, key: str, value: str, action: str):
 @click.option("--openai", is_flag=True, help="Configure OpenAI (Interactive).")
 @click.option("--local-ai", is_flag=True, help="Configure Local AI (Interactive).")
 @click.option("--instruction", is_flag=True, help="Set System Instruction.")
-def config_cmd(shell, global_mode, clear_local, clear_global, show,
+def config_cmd(shell, clear_config, show,
                editor, code_theme, add_marker, remove_marker,
                gemini, openai, local_ai, instruction):
 
     manager = StorageManager()
 
-    local_bank = find_nearest_bank_path(Path.cwd())
-    local_config = local_bank / "config.json" if local_bank else None
-
-    target_name = "Global" if global_mode else ("Local" if local_config and not global_mode else "Global")
-
-    def write_global(key, value):
-        _write_config(GLOBAL_CONFIG_PATH, key, value)
-
-    def write_local(key, value):
-        if local_config:
-            _write_config(local_config, key, value)
-        else:
-            write_global(key, value)
-
+    # =========================================================
+    # SHOW CONFIG
+    # =========================================================
+    # =========================================================
+    # SHOW CONFIG
+    # =========================================================
     if show:
+        config = manager.get_config()
         console.print("")
-        config = manager.get_config() # This gets merged/effective config usually
 
-        path_text = Text()
-        path_text.append("Global Config: ", style="dim")
-        path_text.append(f"{GLOBAL_CONFIG_PATH}\n", style="cyan")
-        
-        path_text.append("Local Config:  ", style="dim")
-        if local_bank:
-            l_path = local_bank / "config.json"
-            status = "[green](Active)[/green]" if l_path.exists() else "[dim](Not created)[/dim]"
-            path_text.append(f"{l_path} {status}", style="magenta")
-        else:
-            path_text.append("(No local bank detected)", style="dim")
+        # 1. Configuration Source
+        console.print("[bold blue ]Configuration Source[/bold blue]")
+        status = "[green](Active)[/green]" if GLOBAL_CONFIG_PATH.exists() else "[dim](Not created)[/dim]"
+        console.print(f"  [dim]Path:[/dim] {GLOBAL_CONFIG_PATH} {status}")
+        console.print("")
 
-        console.print(Panel(path_text, title="[bold]Configuration Sources[/bold]", border_style="dim"))
-
-        settings_text = Text()
-        settings_text.append(f"Target:         {target_name}\n", style="bold yellow")
-        settings_text.append(f"History File:   {config.get('history_file', 'Auto-Detect')}\n")
-        settings_text.append(f"Default Editor: {config.get('default_editor', 'code')}\n")
-        settings_text.append(f"Code Theme:     {config.get('code_theme', 'monokai')}\n")
+        # 2. General Settings
+        console.print("[bold green ]General Settings[/bold green ]")
+        console.print(f"  [dim]History File:[/dim]   {config.get('history_file', 'Auto-Detect')}")
+        console.print(f"  [dim]Default Editor:[/dim] {config.get('default_editor', 'code')}")
+        console.print(f"  [dim]Code Theme:[/dim]     {config.get('code_theme', 'monokai')}")
         
         markers = config.get('project_markers', [])
-        settings_text.append(f"Markers:        {', '.join(markers) if markers else 'None'}")
+        marker_str = ", ".join(markers) if markers else "None"
+        console.print(f"  [dim]Markers:[/dim]        {marker_str}")
+        console.print("")
 
-        console.print(Panel(settings_text, title="[bold]General Settings[/bold]", border_style="blue"))
-
-        ai_text = Text()
+        # 3. AI Configuration
+        console.print("[bold green]AI Configuration[/bold green]")
         
         def format_key(k): return f"{k[:4]}...{k[-4:]}" if k else "Not Set"
 
+        # Gemini
         g = config.get("gemini", {})
-        ai_text.append("Gemini:   ", style="bold cyan")
-        ai_text.append(f"Model='{g.get('model') or 'None'}'  Key='{format_key(g.get('key'))}'\n")
+        console.print(f"  [bold cyan]Gemini:[/bold cyan]   Model='{g.get('model') or 'None'}'  Key='{format_key(g.get('key'))}'")
 
+        # OpenAI
         o = config.get("openai", {})
-        ai_text.append("OpenAI:   ", style="bold green")
-        ai_text.append(f"Model='{o.get('model') or 'None'}'  Key='{format_key(o.get('key'))}'\n")
+        console.print(f"  [bold yellow2]OpenAI:[/bold yellow2]   Model='{o.get('model') or 'None'}'  Key='{format_key(o.get('key'))}'")
 
+        # Local
         l = config.get("local_ai", {})
-        ai_text.append("Local AI: ", style="bold magenta")
-        ai_text.append(f"Model='{l.get('model') or 'None'}'\n\n")
+        console.print(f"  [bold magenta]Local AI:[/bold magenta] Model='{l.get('model') or 'None'}'")
 
+        # Instruction
         instr = config.get("ai_instruction")
+        console.print("")
         if instr:
-            preview = instr[:60].replace("\n", " ") + "..." if len(instr) > 60 else instr
-            ai_text.append(f"Instruction: [dim]{preview}[/dim]")
+            preview = instr[:80].replace("\n", " ") + "..." if len(instr) > 80 else instr
+            console.print(f"  [white]Instruction:[/white] [dim]{preview}[/dim]")
         else:
-            ai_text.append("Instruction: [dim](Default)[/dim]")
+            console.print("  [bold]Instruction:[/bold] [dim](Default)[/dim]")
 
-        console.print(Panel(ai_text, title="[bold]AI Configuration[/bold]", border_style="magenta"))
         console.print("")
         return
 
+    # =========================================================
+    # AI WIZARDS
+    # =========================================================
     if gemini:
         console.print("\n[bold cyan]?[/bold cyan] [bold]Configure Gemini[/bold]")
         data = _load_global_config()
@@ -227,35 +208,41 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         # Escape backslashes for JSON storage
         final_val = re.sub(r'\\', r'\\\\', final_val)
 
-        write_global("ai_instruction", final_val)
+        _write_config("ai_instruction", final_val)
         console.print("  [green]✔ Instruction updated.[/green]\n")
         return
 
+    # =========================================================
+    # STANDARD SETTINGS
+    # =========================================================
     if editor:
-        write_global("default_editor", editor)
+        _write_config("default_editor", editor)
         console.print(f"  [green]✔ Default editor set to:[/green] {editor}")
         return
 
     if code_theme:
-        write_global("code_theme", code_theme)
+        _write_config("code_theme", code_theme)
         console.print(f"  [green]✔ Code theme set to:[/green] {code_theme}")
         return
 
     if add_marker:
-        _modify_config_list(GLOBAL_CONFIG_PATH, "project_markers", add_marker, "add")
+        _modify_config_list("project_markers", add_marker, "add")
         return
 
     if remove_marker:
-        _modify_config_list(GLOBAL_CONFIG_PATH, "project_markers", remove_marker, "remove")
+        _modify_config_list("project_markers", remove_marker, "remove")
         return
 
+    # =========================================================
+    # SHELL SELECTION
+    # =========================================================
     if shell:
         candidates = get_all_history_candidates()
         if not candidates:
             console.print("  [yellow]! No history files found.[/yellow]")
             return
 
-        console.print(f"\n[bold]Select History File[/bold] [dim]({target_name})[/dim]")
+        console.print(f"\n[bold]Select History File[/bold]")
         
         table = Table(show_header=False, box=None, padding=(0, 2))
         for i, path in enumerate(candidates):
@@ -268,23 +255,20 @@ def config_cmd(shell, global_mode, clear_local, clear_global, show,
         selection = IntPrompt.ask("  [cyan]Enter number[/cyan]", choices=choices, show_choices=False)
         
         selected_path = candidates[selection - 1]
-        write_local("history_file", str(selected_path))
+        _write_config("history_file", str(selected_path))
         
         console.print(f"  [green]✔ History source updated:[/green] {selected_path.name}")
         return
 
-    if clear_local:
-        if not local_bank:
-            console.print("  [red]✖ Error: No local bank found.[/red]")
-            return
-        _clear_config(local_config)
-        console.print("  [green]✔ Local configuration cleared.[/green]")
+    # =========================================================
+    # CLEANUP
+    # =========================================================
+    if clear_config:
+        if Confirm.ask("Are you sure you want to reset all configurations?"):
+            _clear_config()
+            console.print("  [green]✔ Configuration reset to defaults.[/green]")
         return
 
-    if clear_global:
-        _clear_config(GLOBAL_CONFIG_PATH)
-        console.print("  [green]✔ Global configuration cleared.[/green]")
-        return
-
+    # Fallback Help
     console.print("\n[dim]Usage: cwm config [OPTIONS][/dim]")
     console.print("[dim]Try 'cwm config --help' for details.[/dim]\n")

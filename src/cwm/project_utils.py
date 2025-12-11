@@ -122,7 +122,11 @@ class ProjectScanner:
         except ValueError:
             return True
 
-    def scan_generator(self):
+    def scan_generator(self, on_progress=None):
+        """
+        Generator that yields found project paths.
+        :param on_progress: Optional callback function(count, current_path) called periodically.
+        """
         stack = [self.root]
 
         while stack:
@@ -137,6 +141,13 @@ class ProjectScanner:
                 continue
 
             self.scanned_count += 1
+            
+            # --- PROGRESS CALLBACK ---
+            # Call update every 50 folders to keep UI responsive but fast
+            if on_progress and self.scanned_count % 50 == 0:
+                on_progress(self.scanned_count, current)
+            # -------------------------
+
             dirs_to_visit = []
             is_project_folder = False
 
@@ -151,22 +162,13 @@ class ProjectScanner:
 
             for entry in entries:
                 name = entry.name
-
-                if name.startswith('.'):
-                    continue
-
-                if name.lower() in self.skip_names:
-                    continue
+                if name.startswith('.'): continue
+                if name.lower() in self.skip_names: continue
 
                 if entry.is_dir(follow_symlinks=False):
                     full_path = Path(entry.path)
-
                     if not self.is_ignored(full_path):
-                        if self.scanned_count % 100 == 0:
-                            print(f"Scanning: {full_path}")
-
                         dirs_to_visit.append(full_path)
 
             stack.extend(dirs_to_visit)
-
 

@@ -9,7 +9,6 @@ import re
 GLOBAL_CWM_BANK = Path(click.get_app_dir("cwm"))
 CWM_BANK_NAME = ".cwm"
 
-
 DEFAULT_AI_INSTRUCTION = """You are DevBot, a senior developer's assistant. Follow these rules:
 *if user aks hello reply hello how can i help you today like this polite and simple.
 *Keep responses short, precise, and actionable.
@@ -28,46 +27,37 @@ DEFAULT_AI_INSTRUCTION = """You are DevBot, a senior developer's assistant. Foll
 * Keep output token usage low while keeping enough detail to understand.
 """
 
-DEFAULT_CONFIG = {}
+DEFAULT_CONFIG = {
+    "history_file": None,
+    "project_markers": [],
+    "code_theme": "monokai",
+    "ai_instruction": None
+}
 
 FILE_ATTRIBUTE_HIDDEN = 0x02
 
+# --- VALIDATION HELPERS ---
 
 def looks_invalid_command(cmd: str) -> bool:
     cmd = cmd.strip()
-
-    if not cmd:
-        return True
-
-    if not cmd.isascii() or any(ord(c) < 32 for c in cmd):
-        return True
-
-    if not re.search(r"[A-Za-z0-9]", cmd):
-        return True
-
-    if cmd.count('"') % 2 != 0:
-        return True
-    if cmd.count("'") % 2 != 0:
-        return True
-
-    if cmd.startswith("|") or cmd.startswith(">") or cmd.startswith("<") or cmd.startswith("#"):
-        return True
-    if cmd.isdigit():
-        return True
-
-    if "|| |" in cmd or "||| " in cmd:
-        return True
-
-    if re.fullmatch(r"[\W_]+", cmd):
-        return True
-
-    if re.search(r"[><]{3,}", cmd):  # like >>>>> or <<<
-        return True
-
+    if not cmd: return True
+    if not cmd.isascii() or any(ord(c) < 32 for c in cmd): return True
+    if not re.search(r"[A-Za-z0-9]", cmd): return True
+    if cmd.count('"') % 2 != 0: return True
+    if cmd.count("'") % 2 != 0: return True
+    if cmd.startswith("|") or cmd.startswith(">") or cmd.startswith("<") or cmd.startswith("#"): return True
+    if cmd.isdigit(): return True
+    if "|| |" in cmd or "||| " in cmd: return True
+    if re.fullmatch(r"[\W_]+", cmd): return True
+    if re.search(r"[><]{3,}", cmd): return True
     return False
 
+def clean_token(text: str) -> str:
+    """Removes whitespace and surrounding quotes."""
+    if not text: return ""
+    return text.strip().strip('"').strip("'")
 
-
+# --- FILESYSTEM HELPERS ---
 
 def _ensure_dir(path: Path):
     if not path.exists():
@@ -85,9 +75,9 @@ def make_hidden(path: Path):
 
 def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
     """
-    Creates CWM bank.
-    - If GLOBAL: Creates data/, saved_cmds.json, projects.json, config.json.
-    - If LOCAL: Creates ONLY .cwm/ folder and watch_session.json.
+    Creates CWM bank structure.
+    - GLOBAL: Creates config.json, data/ (saved_cmds, projects, backup).
+    - LOCAL: Creates ONLY .cwm/ folder and watch_session.json.
     """
     try:
         _ensure_dir(folder_path)
@@ -108,12 +98,14 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
                 "saved_cmds.json": {"last_saved_id": 0, "commands": []},
                 "fav_cmds.json": [],
                 "projects.json": {"last_id": 0, "last_group_id": 0, "projects": [], "groups": []},
+                # Watch session placeholder for global context
+                "watch_session.json": {"isWatching": False}
             }
 
             # Global Config
             config_file = folder_path / "config.json"
             if not config_file.exists():
-                config_file.write_text("{}")
+                config_file.write_text(json.dumps(DEFAULT_CONFIG, indent=4))
 
             # Create Data Files
             for fname, default_value in required_files.items():
@@ -123,32 +115,24 @@ def safe_create_cwm_folder(folder_path: Path, repair=False) -> bool:
                     if repair:
                         click.echo(f"Global file {fname} restored.")
 
-       
+        # --- LOCAL BANK SETUP ---
         else:
-      
-            pass 
-
-        
-        if is_global:
-            ws_file = folder_path / "data" / "watch_session.json"
-        else:
+            # Local banks only need watch session storage
             ws_file = folder_path / "watch_session.json"
-
-        if not ws_file.exists():
-            default_session = {
-                "isWatching": False,
-                "shell":"",
-                "hook_file":"",
-                "started_at":None
-            }
-            ws_file.write_text(json.dumps(default_session, indent=4))
+            if not ws_file.exists():
+                default_session = {
+                    "isWatching": False,
+                    "shell": None,
+                    "hook_file": None,
+                    "started_at": None
+                }
+                ws_file.write_text(json.dumps(default_session, indent=4))
 
         return True
 
     except Exception as e:
         click.echo(f"Error creating CWM folder: {e}", err=True)
         return False
-
 
 def has_write_permission(path: Path) -> bool:
     try:
@@ -159,11 +143,9 @@ def has_write_permission(path: Path) -> bool:
     except:
         return False
 
-
 def is_path_literally_inside_bank(path: Path) -> bool:
     current = path.resolve()
     return CWM_BANK_NAME in current.parts
-
 
 def find_nearest_bank_path(start_path: Path) -> Path | None:
     current = start_path.resolve()
@@ -173,6 +155,7 @@ def find_nearest_bank_path(start_path: Path) -> Path | None:
             return candidate
     return None
 
+# --- HISTORY HELPERS ---
 
 def get_all_history_candidates() -> list[Path]:
     """Returns a list of all valid history files found on the system."""
@@ -203,7 +186,6 @@ def get_all_history_candidates() -> list[Path]:
 
     return existing_files
 
-
 def _read_config_for_history(bank_path: Path) -> Path | None:
     """Helper to read history_file from a specific bank's config."""
     try:
@@ -219,81 +201,32 @@ def _read_config_for_history(bank_path: Path) -> Path | None:
         pass
     return None
 
-
 def get_history_file_path() -> Path | None:
     """
     Finds the active history file.
     Priority:
-    1. Config in Local Bank
-    2. Config in Global Bank (The Fix!)
-    3. Auto-Detection (OS/Shell)
+    1. Global Config (Source of Truth)
+    2. Auto-Detection (OS/Shell)
     """
-
-    local_bank = find_nearest_bank_path(Path.cwd())
-    if local_bank:
-        override = _read_config_for_history(local_bank)
-        if override:
-            return override
-
-    global_bank = Path(click.get_app_dir("cwm"))
+    # Check Global Config
+    global_bank = GLOBAL_CWM_BANK
     if global_bank.exists():
         override = _read_config_for_history(global_bank)
         if override:
             return override
 
-    system = platform.system()
-    home = Path.home()
-    candidates = []
-
-    if system == "Windows":
-        is_git_bash = "MSYSTEM" in os.environ or "bash" in os.environ.get(
-            "SHELL", "").lower()
-
-        if is_git_bash:
-            candidates.append(home / ".bash_history")
-
-        appdata = os.getenv("APPDATA")
-        if appdata:
-            candidates.append(Path(appdata) / "Microsoft" / "Windows" /
-                              "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
-        candidates.append(home / "AppData" / "Roaming" / "Microsoft" /
-                          "Windows" / "PowerShell" / "PSReadLine" / "ConsoleHost_history.txt")
-
-        if not is_git_bash:
-            candidates.append(home / ".bash_history")
-
-    else:
-        shell = os.environ.get("SHELL", "")
-        if "zsh" in shell:
-            candidates.append(home / ".zsh_history")
-            candidates.append(home / ".bash_history")
-        else:
-            candidates.append(home / ".bash_history")
-            candidates.append(home / ".zsh_history")
-        candidates.append(home / ".local" / "share" / "powershell" /
-                          "PSReadLine" / "ConsoleHost_history.txt")
-
-    for path in candidates:
-        if path.exists():
-            return path
-
-    return None
-
+    # Auto-Detect
+    candidates = get_all_history_candidates()
+    return candidates[0] if candidates else None
 
 def tail_read_last_n_lines(path, n, chunk_size=4096):
-    """
-    Correct tail implementation that does NOT reverse characters.
-    """
-    if isinstance(path, Path):
-        path = str(path)
-
-    if not os.path.exists(path):
-        return []
+    """Correct tail implementation that does NOT reverse characters."""
+    if isinstance(path, Path): path = str(path)
+    if not os.path.exists(path): return []
 
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
         file_size = f.tell()
-
         data = bytearray()
         lines_found = 0
         remaining = file_size
@@ -302,33 +235,20 @@ def tail_read_last_n_lines(path, n, chunk_size=4096):
             read_size = min(chunk_size, remaining)
             remaining -= read_size
             f.seek(remaining)
-
             chunk = f.read(read_size)
-            data[:0] = chunk  # prepend chunk instead of extend
-
+            data[:0] = chunk 
             lines_found += chunk.count(b"\n")
 
         text = data.decode("utf-8", errors="ignore")
         lines = text.splitlines()
-
         return lines[-n:]
 
-
 def read_powershell_history() -> Tuple[list[str], int]:
-    """
-    Fast tail-based history reader.
-    Returns (list_of_lines, APPROX_total_lines).
-
-    It reads only the last chunk (about ~5000 lines),
-    but still returns the correct NEWEST lines.
-    """
-
     path = get_history_file_path()
     if not path or not path.exists():
         return [], 0
 
     lines = tail_read_last_n_lines(path, 5000)
-
     try:
         total_count = sum(1 for _ in open(path, 'rb'))
     except:
@@ -337,17 +257,12 @@ def read_powershell_history() -> Tuple[list[str], int]:
     cleaned = [ln.rstrip("\n") for ln in lines if ln.strip()]
     return cleaned, total_count
 
-
 def is_cwm_call(s: str) -> bool:
     s = s.strip()
     return s.startswith("cwm ") or s == "cwm"
 
-
 def is_history_sync_enabled() -> bool:
-    """Checks if the shell is configured to sync history instantly."""
-    if os.name == 'nt':
-        return True  # Windows (PowerShell) handles this by default
-
+    if os.name == 'nt': return True 
     home = Path.home()
     bashrc = home / ".bashrc"
     zshrc = home / ".zshrc"
@@ -357,38 +272,28 @@ def is_history_sync_enabled() -> bool:
             content = bashrc.read_text(encoding="utf-8", errors="ignore")
             if "history -a" in content and "PROMPT_COMMAND" in content:
                 return True
-        except:
-            pass
+        except: pass
 
     if zshrc.exists():
         try:
             content = zshrc.read_text(encoding="utf-8", errors="ignore")
             if "inc_append_history" in content.lower() or "share_history" in content.lower():
                 return True
-        except:
-            pass
+        except: pass
 
     return False
 
-
 def get_history_line_count() -> int:
-    """Fast check of history file length."""
     path = get_history_file_path()
-    if not path or not path.exists():
-        return 0
+    if not path or not path.exists(): return 0
     try:
         return sum(1 for _ in open(path, 'rb'))
-    except:
-        return 0
-
+    except: return 0
 
 def get_clear_history_command() -> str:
-    """Returns the command to clear history based on the active shell."""
     path = get_history_file_path()
-
     if not path:
-        if os.name == 'nt':
-            return "Clear-Content (Get-PSReadlineOption).HistorySavePath"
+        if os.name == 'nt': return "Clear-Content (Get-PSReadlineOption).HistorySavePath"
         return "cat /dev/null > ~/.bash_history && history -c"
 
     if "ConsoleHost_history.txt" in path.name:
@@ -398,7 +303,7 @@ def get_clear_history_command() -> str:
     else:
         return f"cat /dev/null > {path} && history -c"
 
-
+# --- SAFETY LOGIC ---
 
 BANNED_EXECUTABLES = {
     "rm", "del", "rd", "rmdir", "format", "fdisk", "mkfs", "sudo", "su"
@@ -415,8 +320,7 @@ def is_safe_startup_cmd(cmd_input, project_root: Path = None) -> bool:
     Validator for startup commands.
     Blocks dangerous executables and specific patterns.
     """
-    if not cmd_input:
-        return False
+    if not cmd_input: return False
 
     cmds_to_check = []
     if isinstance(cmd_input, list):
@@ -425,9 +329,8 @@ def is_safe_startup_cmd(cmd_input, project_root: Path = None) -> bool:
         cmds_to_check = [str(cmd_input)]
 
     for cmd in cmds_to_check:
-        # CRITICAL FIX: Strip whitespace AND quotes before validation
+        # Strip whitespace AND quotes before validation
         cmd = cmd.strip().strip('"').strip("'")
-        
         if not cmd: continue
         
         cmd_lower = cmd.lower()
@@ -446,23 +349,14 @@ def is_safe_startup_cmd(cmd_input, project_root: Path = None) -> bool:
         if executable in BANNED_EXECUTABLES:
             return False
 
-        # 3. Specific Python Safety Checks (if root provided)
+        # 3. Specific Python Safety Checks
         if project_root and len(parts) > 1 and executable in ("python", "python3", "py"):
             script = parts[1]
             if not script.startswith("-"):
                 try:
-                    root_abs = project_root.resolve()
                     # Basic directory traversal check
                     if ".." in script:
                         return False
-                except:
-                    pass
+                except: pass
 
     return True
-
-
-def clean_token(text: str) -> str:
-    """Removes whitespace and surrounding quotes."""
-    if not text: return ""
-    # Strip whitespace, then double quotes, then single quotes
-    return text.strip().strip('"').strip("'")

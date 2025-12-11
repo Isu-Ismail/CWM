@@ -1,39 +1,46 @@
 import click
 from pathlib import Path
+from rich.console import Console
+from rich.table import Table
+from rich.prompt import Prompt, Confirm
+
 from .storage_manager import StorageManager
 from .rich_help import RichHelpCommand
 
+console = Console()
+
+# --- HELPERS ---
 
 def _clean_file_logic(target_path: Path, filter_str: str | None, remove_invalid: bool):
     """
-    Clean history file (System or Local) and save to 'filename_cleaned.txt'.
+    Clean history file logic (System or Local).
     """
     from .utils import looks_invalid_command
 
-    click.echo("[1/4] Locating history file...")
+    console.print(f"[bold cyan][1/4][/bold cyan] Locating history file...")
     if not target_path or not target_path.exists():
-        click.echo(f"Error: Could not locate file at {target_path}", err=True)
+        console.print(f"[red]Error: Could not locate file at {target_path}[/red]")
         return
 
     try:
         lines = target_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception as e:
-        click.echo(f"Error reading file: {e}", err=True)
+        console.print(f"[red]Error reading file: {e}[/red]")
         return
 
     if not lines:
-        click.echo("History file is empty.")
+        console.print("[yellow]History file is empty.[/yellow]")
         return
 
-    click.echo(f"[1/4] Loaded {len(lines)} lines.")
-    click.echo("[2/4] Preparing filters...")
+    console.print(f"[dim]Loaded {len(lines)} lines.[/dim]")
+    console.print("[bold cyan][2/4][/bold cyan] Preparing filters...")
 
     filters = []
     if filter_str:
         filters = [f.strip().strip('"').strip("'") for f in filter_str.split(",") if f.strip()]
-        click.echo(f"Filters active: {filters}")
+        console.print(f"  [dim]Filters active: {filters}[/dim]")
 
-    click.echo("[3/4] Deduplicating (keep newest copies)...")
+    console.print("[bold cyan][3/4][/bold cyan] Deduplicating (keep newest copies)...")
     seen = set()
     deduped = []
     for line in reversed(lines):
@@ -42,9 +49,9 @@ def _clean_file_logic(target_path: Path, filter_str: str | None, remove_invalid:
             seen.add(cmd)
             deduped.append(cmd)
     deduped.reverse()
-    click.echo(f"[3/4] Deduped to {len(deduped)} unique lines.")
+    console.print(f"  [dim]Deduped to {len(deduped)} unique lines.[/dim]")
 
-    click.echo("[4/4] Filtering & validating commands...")
+    console.print("[bold cyan][4/4][/bold cyan] Filtering & validating commands...")
     final_list = []
     removed_filtered = 0
     removed_invalid_count = 0
@@ -61,113 +68,193 @@ def _clean_file_logic(target_path: Path, filter_str: str | None, remove_invalid:
     out_file = target_path.parent / f"{target_path.stem}_cleaned{target_path.suffix}"
     out_file.write_text("\n".join(final_list), encoding="utf-8")
 
-    click.echo("\nCleaning complete!")
-    click.echo(f"Saved preview to: {out_file.name}")
-    click.echo(f"Removed: {removed_filtered} (filters), {removed_invalid_count} (invalid)")
-    click.echo("Run with --apply to overwrite the actual history file.")
+    console.print("\n[bold green]✔ Cleaning complete![/bold green]")
+    console.print(f"  Saved preview to: [cyan]{out_file.name}[/cyan]")
+    console.print(f"  Removed: [red]{removed_filtered}[/red] (filters), [red]{removed_invalid_count}[/red] (invalid)")
+    console.print("  [dim]Run with --apply to overwrite the actual history file.[/dim]")
 
 
 def _apply_cleaned_file(path: Path):
-    """
-    Backs up original -> Overwrites with cleaned version.
-    """
     cleaned_path = path.parent / f"{path.stem}_cleaned{path.suffix}"
 
     if not cleaned_path.exists():
-        click.echo(f"Error: Cleaned file '{cleaned_path.name}' not found. Run cleaning first.", err=True)
+        console.print(f"[red]Error: Cleaned file '{cleaned_path.name}' not found. Run cleaning first.[/red]")
         return
 
     manager = StorageManager()
     
+    # Use internal method to backup
     manager._update_backup(path) 
-    click.echo(f"Backup updated: {path.name}.bak")
+    console.print(f"[dim]Backup created: {path.name}.bak[/dim]")
 
     clean_text = cleaned_path.read_text(encoding="utf-8", errors="ignore")
     path.write_text(clean_text, encoding="utf-8")
     
-    cleaned_path.unlink() # Delete the temp _cleaned file
+    cleaned_path.unlink()
 
-    click.echo(f"✔ File {path.name} successfully updated!")
+    console.print(f"[bold green]✔ File {path.name} successfully updated![/bold green]")
 
 
 def _undo_cleaning(path: Path):
-    """
-    Restores from the standard .bak file using StorageManager logic.
-    """
     manager = StorageManager()
-    
     restored_data = manager._restore_from_backup(path, default="")
     
     if restored_data:
-         click.echo(f"✔ Successfully undid changes to {path.name}")
+         console.print(f"[bold green]✔ Successfully undid changes to {path.name}[/bold green]")
     else:
-         click.echo(f"⚠ Undo failed or no backup found for {path.name}")
+         console.print(f"[red]⚠ Undo failed or no backup found for {path.name}[/red]")
 
 
 def _get_local_history_file() -> Path | None:
     manager = StorageManager()
     root = manager.find_project_root()
-    hist = root / ".cwm" / "project_history.txt"
+    if not root:
+        console.print("[red]Local History file not found (are you in a project?)[/red]")
+        return None
     
+    hist = root / ".cwm" / "project_history.txt"
     if hist.exists():
         return hist
         
-    click.echo("Local History file not found (are you in a project?)")
+    console.print("[red]Local History file does not exist yet.[/red]")
     return None
-def _perform_clear(data_obj: dict, list_key: str, id_key: str, 
-                   count: int, filter_str: str, clear_all: bool) -> int:
-    """Generic logic to clear items from JSON data objects."""
-    commands = data_obj.get(list_key, [])
-    initial_count = len(commands)
-    
-    if clear_all:
-        data_obj[list_key] = []
-        data_obj[id_key] = 0
-        return initial_count
 
-    if count > 0:
-        if count >= len(commands):
-            commands = []
-        else:
-            commands = commands[count:]
-    
-    final_list = []
+# --- NEW SAVED COMMAND LOGIC ---
+
+def _delete_saved_wizard(manager):
+    """Interactive wizard to delete saved commands."""
+    data = manager.load_saved_cmds()
+    commands = data.get("commands", [])
+
+    if not commands:
+        console.print("[dim]No saved commands to clear.[/dim]")
+        return
+
+    # 1. Display Table
+    console.print("\n[bold]Saved Commands[/bold]")
+    table = Table(box=None, show_header=True, padding=(0, 2))
+    table.add_column("ID", style="cyan", justify="right")
+    table.add_column("Variable", style="bold white")
+    table.add_column("Command", style="dim")
+
     for cmd in commands:
-        cmd_str = cmd.get("cmd", "")
-        var_str = cmd.get("var", "")
-        
-        should_delete = False
-        if filter_str and (filter_str in cmd_str or filter_str in var_str):
-            should_delete = True
-            
-        if not should_delete:
-            final_list.append(cmd)
-            
-    for i, cmd in enumerate(final_list):
-        cmd["id"] = i + 1
-        
-    data_obj[list_key] = final_list
-    data_obj[id_key] = len(final_list)
+        c_str = cmd.get('cmd', '-')
+        if len(c_str) > 50: c_str = c_str[:47] + "..."
+        table.add_row(str(cmd['id']), cmd.get('var', 'N/A'), c_str)
     
-    return initial_count - len(final_list)
+    console.print(table)
+    console.print("")
 
-@click.command("clear",cls=RichHelpCommand)
-@click.option("--saved", is_flag=True, help="Clear saved commands.")
-@click.option("--hist", is_flag=True, help="Clear cached history.")
+    # 2. Prompt
+    ids_input = Prompt.ask("  [bold red]✖[/bold red] Enter IDs to delete [dim](comma-separated)[/dim]", default="")
+    if not ids_input: return
+
+    try:
+        target_ids = {int(x.strip()) for x in ids_input.split(',') if x.strip()}
+    except ValueError:
+        console.print("[red]Invalid input. Use numbers.[/red]")
+        return
+
+    # 3. Process
+    new_list = [c for c in commands if c['id'] not in target_ids]
+    removed_count = len(commands) - len(new_list)
+
+    if removed_count > 0:
+        # Re-index
+        for i, cmd in enumerate(new_list, start=1):
+            cmd["id"] = i
+        
+        data["commands"] = new_list
+        data["last_saved_id"] = len(new_list)
+        manager.save_saved_cmds(data)
+        console.print(f"[green]✔ Removed {removed_count} commands.[/green]")
+    else:
+        console.print("[yellow]No matching IDs found.[/yellow]")
+
+
+def _delete_saved_direct(manager, target_ids=None, target_vars=None):
+    """Direct deletion by ID or Variable list."""
+    data = manager.load_saved_cmds()
+    commands = data.get("commands", [])
+    initial_len = len(commands)
+    
+    if not commands:
+        console.print("[dim]No saved commands.[/dim]")
+        return
+
+    new_list = []
+    
+    # Filter
+    for cmd in commands:
+        # If ID matches target_ids, skip (delete)
+        if target_ids and cmd['id'] in target_ids:
+            continue
+        # If Var matches target_vars, skip (delete)
+        if target_vars and cmd.get('var') in target_vars:
+            continue
+        new_list.append(cmd)
+
+    removed_count = initial_len - len(new_list)
+
+    if removed_count > 0:
+        # Re-index
+        for i, cmd in enumerate(new_list, start=1):
+            cmd["id"] = i
+            
+        data["commands"] = new_list
+        data["last_saved_id"] = len(new_list)
+        manager.save_saved_cmds(data)
+        console.print(f"[green]✔ Removed {removed_count} commands.[/green]")
+    else:
+        console.print("[yellow]No matching commands found.[/yellow]")
+
+
+# --- MAIN COMMAND ---
+
+@click.command("clear", cls=RichHelpCommand)
+@click.option("--saved", is_flag=True, help="Clear saved commands (Wizard or Direct).")
+@click.option("-id", "target_id", help="Target ID(s) for saved commands (e.g. 1 or 1,2).")
+@click.option("-v", "target_var", help="Target Variable(s) for saved commands.")
 @click.option("--sys-hist", is_flag=True, help="Clean the system shell history.")
 @click.option("--loc-hist", is_flag=True, help="Clean local project history.")
 @click.option("--remove-invalid", is_flag=True, help="Remove invalid or corrupted commands.")
 @click.option("--apply", "apply_flag", is_flag=True, help="Apply the cleaned history to the real file.")
 @click.option("--undo", "undo_flag", is_flag=True, help="Restore from .bak file.")
-@click.option("-n", "count", type=int, default=0, help="Clear the first N (oldest) commands.")
-@click.option("-f", "filter_str", help="Clear commands matching this string.")
-@click.option("--all", "all_flag", is_flag=True, help="Clear EVERYTHING in the target.")
-def clear_cmd(saved, hist, sys_hist, loc_hist, count, filter_str, all_flag, remove_invalid, undo_flag, apply_flag):
+# Kept for History cleaning compatibility
+@click.option("-f", "filter_str", help="Filter string for history cleaning.")
+@click.option("-n", "count", type=int, default=0, help="Clear first N (oldest) history lines.")
+def clear_cmd(saved, target_id, target_var, sys_hist, loc_hist, 
+              count, filter_str, remove_invalid, undo_flag, apply_flag):
     """
-    Clear and re-index commands or clean history files.
+    Clear saved commands or clean history files.
     """
     manager = StorageManager()
 
+    # --- 1. SAVED COMMANDS LOGIC ---
+    if saved:
+        # Direct Mode (Flags provided)
+        if target_id or target_var:
+            t_ids = set()
+            t_vars = set()
+            
+            if target_id:
+                try:
+                    t_ids = {int(x.strip()) for x in str(target_id).split(',') if x.strip()}
+                except ValueError:
+                    console.print("[red]Invalid ID format.[/red]")
+                    return
+            
+            if target_var:
+                t_vars = {x.strip() for x in str(target_var).split(',') if x.strip()}
+
+            _delete_saved_direct(manager, target_ids=t_ids, target_vars=t_vars)
+            return
+        
+        # Wizard Mode (No flags)
+        _delete_saved_wizard(manager)
+        return
+
+    # --- 2. SYSTEM HISTORY ---
     if sys_hist:
         from .utils import get_history_file_path
         path = get_history_file_path()
@@ -182,6 +269,7 @@ def clear_cmd(saved, hist, sys_hist, loc_hist, count, filter_str, all_flag, remo
             _apply_cleaned_file(path)
         return
 
+    # --- 3. LOCAL HISTORY ---
     if loc_hist:
         path = _get_local_history_file()
         if not path: return
@@ -195,29 +283,8 @@ def clear_cmd(saved, hist, sys_hist, loc_hist, count, filter_str, all_flag, remo
             _apply_cleaned_file(path)
         return
 
-    if not saved and not hist:
-        raise click.UsageError("Must specify target: --saved, --hist, --sys-hist, or --loc-hist")
-    
-    if saved and hist:
-        raise click.UsageError("Clear one target at a time.")
-        
-    if not (count or filter_str or all_flag):
-        raise click.UsageError("Must specify what to clear: -n, -f, or --all")
-
-    if saved:
-        data = manager.load_saved_cmds()
-        removed = _perform_clear(data, "commands", "last_saved_id", count, filter_str, all_flag)
-        if removed > 0:
-            manager.save_saved_cmds(data)
-            click.echo(f"Removed {removed} commands from Saved list. IDs re-indexed.")
-        else:
-            click.echo("No commands matched criteria.")
-            
-    elif hist:
-        data = manager.load_cached_history()
-        removed = _perform_clear(data, "commands", "last_sync_id", count, filter_str, all_flag)
-        if removed > 0:
-            manager.save_cached_history(data)
-            click.echo(f"Removed {removed} commands from History cache. IDs re-indexed.")
-        else:
-            click.echo("No commands matched criteria.")
+    # Fallback if no main flag selected
+    console.print("[yellow]Please specify what to clear:[/yellow]")
+    console.print("  [cyan]--saved[/cyan]     Saved Commands (Interactive)")
+    console.print("  [cyan]--sys-hist[/cyan]  System Shell History")
+    console.print("  [cyan]--loc-hist[/cyan]  Local Project History")

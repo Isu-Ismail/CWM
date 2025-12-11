@@ -400,7 +400,7 @@ def _resolve_instruction(manager):
 def launch_chat(provider_class, model_key, single_prompt):
     ui = UI()
     manager = StorageManager()
-    config = manager.get_config("global")
+    config = manager.get_config()
     
     theme = config.get("code_theme", "monokai")
     

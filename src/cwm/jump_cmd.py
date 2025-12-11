@@ -13,90 +13,108 @@ from .rich_help import RichHelpCommand
 
 console = Console()
 
+def _launch_terminal(path: str):
+    """
+    Launches a new terminal window detached at the specific path.
+    - Windows: PowerShell
+    - Mac: Terminal (Zsh)
+    - Linux: Default Terminal (Bash)
+    """
+    is_windows = os.name == 'nt'
+    try:
+        if is_windows:
+            # Try Windows Terminal first, fallback to PowerShell
+            if shutil.which("wt"):
+                subprocess.Popen(["wt", "-d", path], shell=True)
+                click.echo("Opening Windows Terminal...")
+            else:
+                # Open PowerShell in a new window
+                subprocess.Popen(
+                    ["start", "powershell", "-NoExit", "-Command", f"cd '{path}'"], 
+                    shell=True
+                )
+                click.echo("Opening PowerShell...")
+        else:
+            if sys.platform == "darwin":
+                # macOS default Terminal (usually Zsh)
+                if os.path.exists("/Applications/iTerm.app"):
+                    subprocess.Popen(["open", "-a", "iTerm", path])
+                else:
+                    subprocess.Popen(["open", "-a", "Terminal", path])
+            else:
+                # Linux
+                terminals = [
+                    "gnome-terminal", "konsole", "xfce4-terminal",
+                    "terminator", "alacritty", "xterm"
+                ]
+                launched = False
+                for term in terminals:
+                    if shutil.which(term):
+                        if term == "gnome-terminal":
+                            subprocess.Popen([term, "--working-directory", path])
+                        elif term == "konsole":
+                            subprocess.Popen([term, "--workdir", path])
+                        else:
+                            subprocess.Popen([term], cwd=path)
+                        click.echo(f"Opening {term}...")
+                        launched = True
+                        break
+                
+                if not launched:
+                    click.echo("Warning: No supported terminal emulator found. Spawning bash shell...")
+                    subprocess.Popen(["bash"], cwd=path)
+
+    except Exception as e:
+        click.echo(f"Failed to launch terminal: {e}")
+
 
 def _launch_editor(path: str, manager: StorageManager):
-    """Smart Launcher: Console apps -> New Window, GUI apps -> Detached."""
+    """
+    Smart Launcher: Tries to open the configured editor. 
+    FALLBACK: Opens the system terminal if editor fails.
+    """
     config = manager.get_config()
     editor_config = config.get("default_editor", "code")
     is_windows = os.name == 'nt'
+    
+    # 1. Check for empty configuration
+    if not editor_config or not editor_config.strip():
+        console.print("[yellow]! No editor configured. Falling back to Terminal.[/yellow]")
+        _launch_terminal(path)
+        return
+
     click.echo(f"Opening {editor_config} in: {path}")
 
     try:
         args = shlex.split(editor_config)
+        
+        # FIX: Check if split resulted in empty list (causes index out of range)
+        if not args:
+            raise ValueError("Empty editor command")
+
         cmd_exec = args[0].lower()
-        console_apps = ["jupyter", "python", "cmd",
-                        "powershell", "pwsh", "wt", "vim", "nano"]
+        console_apps = ["jupyter", "python", "cmd", "powershell", "pwsh", "wt", "vim", "nano"]
         is_console_app = any(app in cmd_exec for app in console_apps)
 
         if len(args) == 1 and not is_console_app:
             args.append(".")
 
+        # Check if executable exists before trying
+        if not shutil.which(args[0]):
+            raise FileNotFoundError(f"Command '{args[0]}' not found")
+
         if is_windows:
-            executable = shutil.which(args[0])
             if is_console_app:
-                if executable:
-                    subprocess.Popen(
-                        args, cwd=path, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                else:
-                    subprocess.Popen(args, cwd=path, shell=True)
+                subprocess.Popen(args, cwd=path, creationflags=subprocess.CREATE_NEW_CONSOLE)
             else:
                 subprocess.Popen(args, cwd=path, shell=True)
         else:
-            if not shutil.which(args[0]):
-                click.echo(f"Error: Command '{args[0]}' not found.")
-                return
             subprocess.Popen(args, cwd=path)
-    except Exception as e:
-        click.echo(f"Error launching editor: {e}")
-
-
-def _launch_terminal(path: str):
-    """Launches a new terminal window detached."""
-    is_windows = os.name == 'nt'
-    try:
-        if is_windows:
-            if shutil.which("wt"):
-                subprocess.Popen(["wt", "-d", path], shell=True)
-                click.echo("Opening Windows Terminal...")
-            else:
-                subprocess.Popen(
-                    ["start", "cmd", "/k", f"cd /d {path}"], shell=True)
-        else:
-            if sys.platform == "darwin":
-
-                if os.path.exists("/Applications/iTerm.app"):
-                    subprocess.Popen(["open", "-a", "iTerm", path])
-                else:
-                    subprocess.Popen(["open", "-a", "Terminal", path])
-
-            else:
-                terminals = [
-                    "gnome-terminal", "konsole", "xfce4-terminal",
-                    "terminator", "alacritty", "xterm"
-                ]
-
-                launched = False
-                for term in terminals:
-                    if shutil.which(term):
-                        if term == "gnome-terminal":
-                            subprocess.Popen(
-                                [term, "--working-directory", path])
-                        elif term == "konsole":
-                            subprocess.Popen([term, "--workdir", path])
-                        else:
-
-                            subprocess.Popen([term], cwd=path)
-
-                        click.echo(f"Opening {term}...")
-                        launched = True
-                        break
-
-                if not launched:
-                    click.echo(
-                        "Could not detect a supported terminal (Gnome, Konsole, Terminator, etc).")
 
     except Exception as e:
-        click.echo(f"Failed to launch terminal: {e}")
+        console.print(f"[yellow]⚠ Could not launch editor ({editor_config}): {e}[/yellow]")
+        console.print("[dim]Falling back to default terminal...[/dim]")
+        _launch_terminal(path)
 
 
 def _resolve_project(token: str, projects: list):
@@ -125,6 +143,18 @@ def _resolve_project(token: str, projects: list):
 def jump_cmd(names, terminal, list_mode, count):
     """
     Jump to a project (Launch Editor + Terminal).
+    
+    If no editor is configured, it falls back to the system terminal:
+    - Windows: [bold]PowerShell[/bold]
+    - Linux:   [bold]Bash[/bold]
+    - macOS:   [bold]Zsh[/bold] (Terminal.app)
+
+    Common Editors:
+    - [cyan]code[/cyan] (VS Code)
+    - [cyan]pycharm[/cyan] (PyCharm)
+    - [cyan]notepad[/cyan] (Notepad)
+    - [cyan]subl[/cyan] (Sublime Text)
+    - [cyan]nvim[/cyan] (Neovim)
     """
     manager = StorageManager()
     data = manager.load_projects()
@@ -231,5 +261,3 @@ def jump_cmd(names, terminal, list_mode, count):
         console.print("  [dim]Done.[/dim]\n")
 
     manager.save_projects(data)
-
-
