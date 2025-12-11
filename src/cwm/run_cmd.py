@@ -4,11 +4,13 @@ import sys
 import os
 import shutil
 import subprocess
+import shlex
+from pathlib import Path
 
 # Rich Imports
 from rich.console import Console
 from rich.table import Table
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 
 from .storage_manager import StorageManager
 from .service_manager import ServiceManager
@@ -17,6 +19,62 @@ from .rich_help import RichHelpGroup, RichHelpCommand
 # Initialize Console
 console = Console()
 
+def _launch_interactive_command(cmd_str: str, cwd: Path, title: str = "CWM Task"):
+    """
+    Launches a command in a NEW, VISIBLE terminal window.
+    Windows: Uses PowerShell (new window).
+    """
+    is_windows = os.name == 'nt'
+    
+    try:
+        if is_windows:
+            # WINDOWS FIX: PowerShell 5.1 doesn't support '&&'.
+            # We replace '&&' with '; if ($?) {' logic to simulate it,
+            # or simpler: just use '; ' if precise error handling isn't critical for the launcher.
+            # But for startup commands, we usually want the second to run only if the first succeeds.
+            
+            # Robust replacement for && in PowerShell 5.1+
+            # This turns "cmd1 && cmd2" into "cmd1; if ($?) { cmd2 }"
+            ps_safe_cmd = cmd_str.replace(" && ", "; if ($?) { ") + (" }" * cmd_str.count(" && "))
+
+            # Construct the full PowerShell command block
+            full_command = f"cd '{cwd}'; $host.UI.RawUI.WindowTitle = '{title}'; {ps_safe_cmd}"
+            
+            subprocess.Popen(
+                ["start", "powershell", "-NoExit", "-Command", full_command], 
+                shell=True
+            )
+            
+        elif sys.platform == "darwin":
+            # macOS (unchanged)
+            script = f'tell application "Terminal" to do script "cd {cwd} && {cmd_str}"'
+            subprocess.Popen(["osascript", "-e", script])
+            
+        else:
+            # Linux (unchanged)
+            terminals = ["gnome-terminal", "konsole", "xfce4-terminal", "xterm"]
+            launched = False
+            for term in terminals:
+                if shutil.which(term):
+                    if term == "gnome-terminal":
+                        subprocess.Popen([term, "--working-directory", str(cwd), "--", "bash", "-c", f"{cmd_str}; exec bash"])
+                    elif term == "konsole":
+                        subprocess.Popen([term, "--workdir", str(cwd), "-e", "bash", "-c", f"{cmd_str}; exec bash"])
+                    else:
+                        subprocess.Popen([term, "-e", f"bash -c '{cmd_str}; exec bash'"], cwd=str(cwd))
+                    launched = True
+                    break
+            if not launched:
+                console.print("[red]✖ No supported terminal emulator found.[/red]")
+                return
+
+        console.print(f"[green]➜ Launched interactive terminal:[/green] [bold]{title}[/bold]")
+
+    except Exception as e:
+        console.print(f"[red]✖ Failed to launch terminal:[/red] {e}")
+
+
+# --- EXISTING HELPERS ---
 def _require_gui_deps():
     if ServiceManager is None:
         console.print("[red]✖ Error: Missing dependencies.[/red]")
@@ -47,33 +105,18 @@ def _resolve_group_id(token, groups):
     return None
 
 def _launch_detached_gui():
-    """
-    Launches the GUI silently (no black window) and COMPLETELY DETACHED.
-    Redirects stdout/stderr to DEVNULL so the terminal doesn't hang.
-    """
     args = [sys.executable, "-m", "cwm.cli", "run", "_gui-internal"]
     is_windows = os.name == 'nt'
-    
     try:
-        # FIX: Redirect all streams to DEVNULL to prevent terminal freezing
-        kwargs = {
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-        }
-
+        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         if is_windows:
-            # CREATE_NO_WINDOW = 0x08000000
             subprocess.Popen(args, creationflags=0x08000000, **kwargs)
         else:
             if sys.platform == "darwin":
-                # Mac specific open command
                 cmd_str = f"'{sys.executable}' -m cwm.cli run _gui-internal"
                 subprocess.Popen(["open", "-a", "Terminal", cmd_str])
             else:
-                # Linux: start_new_session=True acts like setsid
                 subprocess.Popen(args, start_new_session=True, **kwargs)
-        
         console.print("[green]✔ Launching Dashboard...[/green]")
     except Exception as e:
         console.print(f"[red]✖ Failed to launch GUI: {e}[/red]")
@@ -84,9 +127,15 @@ def run_cmd():
     """Orchestrate background processes."""
     pass
 
-@run_cmd.command("project", cls=RichHelpCommand, help="Run a single project in background")
+@run_cmd.command("project", cls=RichHelpCommand, help="Run a single project.")
 @click.argument("target", required=False)
-def run_project(target):
+@click.option("-x", "--exec", "exec_mode", is_flag=True, help="Launch in a new interactive terminal window.")
+def run_project(target, exec_mode):
+    """
+    Run a project.
+    Default: Background process (monitored).
+    --exec:  New interactive window (unmonitored).
+    """
     if not _require_gui_deps(): return
     manager = StorageManager()
     data = manager.load_projects()
@@ -103,12 +152,7 @@ def run_project(target):
         for p in sorted(projects, key=lambda x: x["id"]):
             cmd_prev = p.get('startup_cmd', '-') or "-"
             if len(cmd_prev) > 30: cmd_prev = cmd_prev[:27] + "..."
-            
-            table.add_row(
-                f"[cyan][{p['id']}][/cyan]", 
-                f"[bold white]{p['alias']}[/bold white]", 
-                f"[dim]{cmd_prev}[/dim]"
-            )
+            table.add_row(f"[cyan][{p['id']}][/cyan]", f"[bold white]{p['alias']}[/bold white]", f"[dim]{cmd_prev}[/dim]")
         
         console.print(table)
         console.print("")
@@ -120,31 +164,43 @@ def run_project(target):
         console.print(f"[red]✖ Project '{target}' not found.[/red]")
         return
 
-    
-    # --- STARTUP CHECK ---
+    # --- SETUP & CHECK ---
     project = next(p for p in projects if p["id"] == pid)
-    if not project.get("startup_cmd"):
+    raw_cmd = project.get("startup_cmd")
+    
+    if not raw_cmd:
         console.print(f"[red]✖ Error: Project '{project['alias']}' has no startup command.[/red]")
-        console.print(f"  [dim]Run 'cwm project edit -id {pid}' to add one.[/dim]")
         return
 
+    # Normalize command
+    if isinstance(raw_cmd, list):
+        joiner = " && " if os.name == 'nt' else " && "
+        cmd_str = joiner.join(raw_cmd)
+    else:
+        cmd_str = str(raw_cmd)
+
+    root_path = Path(project["path"]).resolve()
+    cmd_str = cmd_str.replace("$ROOT", str(root_path))
+
+    # --- EXEC MODE (Interactive) ---
+    if exec_mode:
+        _launch_interactive_command(cmd_str, root_path, title=f"CWM: {project['alias']}")
+        return
+
+    # --- DEFAULT MODE (Background) ---
     svc = ServiceManager()
     success, msg = svc.start_project(pid)
     
     if success: 
-        console.print(f"[green]✔ {msg}[/green]")
+        click.echo(click.style(f"✔ {msg}", fg="green", bold=True))
     else: 
-        console.print(f"[red]✖ Failed: {msg}[/red]")
+        click.echo(click.style(f"✘ Failed: {msg}", fg="red"))
 
 
-@run_cmd.command("gui", cls=RichHelpCommand)
-def launch_gui_detached():
-    """Public command to launch the dashboard."""
-    _launch_detached_gui()
-
-@run_cmd.command("group", cls=RichHelpCommand, help="Run group of projects")
+@run_cmd.command("group", cls=RichHelpCommand, help="Run group of projects.")
 @click.argument("target", required=False)
-def run_group(target):
+@click.option("-x", "--exec", "exec_mode", is_flag=True, help="Launch all projects in new windows.")
+def run_group(target, exec_mode):
     if not _require_gui_deps(): return
     manager = StorageManager()
     data = manager.load_projects()
@@ -158,15 +214,9 @@ def run_group(target):
     if not target:
         console.print("\n[bold]Available Groups[/bold]")
         table = Table(box=None, show_header=False, padding=(0, 2))
-        
         for g in sorted(groups, key=lambda x: x["id"]):
             count = len(g.get("project_list", [])) 
-            table.add_row(
-                f"[cyan][{g['id']}][/cyan]", 
-                f"[bold white]{g['alias']}[/bold white]", 
-                f"[dim]({count} projects)[/dim]"
-            )
-        
+            table.add_row(f"[cyan][{g['id']}][/cyan]", f"[bold white]{g['alias']}[/bold white]", f"[dim]({count} projects)[/dim]")
         console.print(table)
         console.print("")
         target = Prompt.ask("  [bold cyan]?[/bold cyan] Select Group ID/Alias", default="", show_default=False)
@@ -179,7 +229,7 @@ def run_group(target):
         
     group = next(g for g in groups if g["id"] == gid)
     
-    # Extract IDs from project_list
+    # Extract IDs
     pids = []
     for item in group.get("project_list", []):
         if isinstance(item, dict): pids.append(item.get("id"))
@@ -189,30 +239,53 @@ def run_group(target):
         console.print("[yellow]! Group is empty.[/yellow]")
         return
 
-    # --- PRE-VALIDATION CHECK ---
-    missing_cmds = []
+    # Pre-validation
+    valid_projects = []
     for pid in pids:
         proj = next((p for p in projects if p['id'] == pid), None)
-        if proj and not proj.get("startup_cmd"):
-            missing_cmds.append(proj['alias'])
+        if proj:
+            if not proj.get("startup_cmd"):
+                console.print(f"[red]✖ Skipped '{proj['alias']}': No startup command.[/red]")
+            else:
+                valid_projects.append(proj)
 
-    if missing_cmds:
-        console.print(f"[bold red]✖ Aborted: The following projects have no startup command:[/bold red]")
-        for alias in missing_cmds:
-            console.print(f"  - [red]{alias}[/red]")
+    if not valid_projects:
         return
 
-    svc = ServiceManager()
-    console.print(f"\n[bold]Starting group '{group['alias']}'...[/bold]")
-    
-    for pid in pids:
-        p_alias = next((p['alias'] for p in projects if p['id'] == pid), str(pid))
-        success, msg = svc.start_project(pid)
-        if success:
-            console.print(f"  [green]✔[/green] {p_alias:<15}: {msg}")
+    if exec_mode:
+        console.print(f"\n[bold]Launching {len(valid_projects)} windows...[/bold]")
+    else:
+        console.print(f"\n[bold]Starting group '{group['alias']}'...[/bold]")
+        svc = ServiceManager()
+
+    for proj in valid_projects:
+        # Prepare Command
+        raw_cmd = proj.get("startup_cmd")
+        if isinstance(raw_cmd, list):
+            joiner = " && " if os.name == 'nt' else " && "
+            cmd_str = joiner.join(raw_cmd)
         else:
-            console.print(f"  [red]✘[/red] {p_alias:<15}: {msg}")
+            cmd_str = str(raw_cmd)
+        
+        root_path = Path(proj["path"]).resolve()
+        cmd_str = cmd_str.replace("$ROOT", str(root_path))
+
+        if exec_mode:
+            # Interactive Launch
+            _launch_interactive_command(cmd_str, root_path, title=f"CWM: {proj['alias']}")
+            # Small sleep to prevent window stacking overlap glitches on some OS
+            time.sleep(0.5) 
+        else:
+            # Background Launch
+            success, msg = svc.start_project(proj['id'])
+            if success:
+                click.echo(f"  {click.style('✔', fg='green')} {proj['alias']:<15}: {msg}")
+            else:
+                click.echo(f"  {click.style('✘', fg='red')} {proj['alias']:<15}: {msg}")
+    
     console.print("")
+
+
 
 @run_cmd.command("stop", cls=RichHelpCommand, help="Stop bg process but maintain state")
 @click.argument("target", required=False)
@@ -532,3 +605,8 @@ def clean_logs():
         console.print(f"\n[red]! {locked} files locked (Close open terminals).[/red]")
     else:
         console.print("[bold green]✔ All clean.[/bold green]")
+
+@run_cmd.command("gui")
+def launch_gui_detached():
+    """command to launch the orchestrator dashboard."""
+    _launch_detached_gui()

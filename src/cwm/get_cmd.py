@@ -12,8 +12,6 @@ console = Console()
 def _get_history_commands(manager: StorageManager, active: bool):
     """
     Returns list of command objects [{"cmd": "..."}].
-    - active=True: Reads from local project_history.txt
-    - active=False: Reads from system shell history
     """
     if active:
         # 1. Local Project History
@@ -27,12 +25,10 @@ def _get_history_commands(manager: StorageManager, active: bool):
             console.print("[yellow]! Local history file is empty/missing.[/yellow]")
             return [], None
 
-        # Read local history
         try:
             lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-            # Filter out empty lines
             lines = [l for l in lines if l.strip()]
-            console.print(f"[dim]Loaded {len(lines)} commands from local project history.[/dim]")
+            # Removed the "Loaded X commands" print to save space
             return [{"cmd": line} for line in lines], None
         except Exception as e:
             console.print(f"[red]Error reading local history: {e}[/red]")
@@ -71,9 +67,9 @@ def _apply_robust_filters(commands, filter_str, exclude_str):
 
 def _display_table(items, columns, title):
     """Generic Rich Table Display."""
-    table = Table(title=title, box=None, show_header=True, padding=(0, 2))
+    # FIX: title_justify="left" keeps the title aligned with the content
+    table = Table(title=title, title_justify="left", box=None, show_header=True, padding=(0, 2))
     
-    # Add columns dynamically
     for col_name, style, justify in columns:
         table.add_column(col_name, style=style, justify=justify)
 
@@ -84,20 +80,13 @@ def _display_table(items, columns, title):
         display_map[display_num] = item.get("cmd", "")
         
         row_data = []
-        # Index Column (always first)
-        row_data.append(f"[{display_num}]")
+        row_data.append(f"{display_num}")
         
-        # Add other fields based on columns config (skipping index col definition)
-        # We handle specific logic for 'Var' and 'Command' below
-        
-        # Logic for Saved Commands (ID | Var | Command)
         if len(columns) == 3: 
             var = item.get("var") or "-"
             cmd = item.get("cmd", "").strip()
             row_data.append(var)
             row_data.append(cmd)
-            
-        # Logic for History (ID | Command)
         else:
             cmd = item.get("cmd", "").strip()
             row_data.append(cmd)
@@ -110,11 +99,6 @@ def _display_table(items, columns, title):
 
 
 def _filter_and_display(commands: list, count: str, exclude: str, filter: str, list_only: bool, mode: str):
-    """
-    Handles both History and Saved display logic.
-    mode: "history" or "saved"
-    """
-    # Deduplicate for display (Keep newest)
     unique_commands = []
     seen = set()
     for item in reversed(commands):
@@ -124,7 +108,6 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
             seen.add(cmd_str)
     unique_commands.reverse()
 
-    # Filter CWM calls for history
     if mode == "history" and not (filter and "cwm" in filter):
         base_list = [item for item in unique_commands if not is_cwm_call(item.get("cmd", ""))]
     else:
@@ -137,7 +120,6 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
         console.print("[yellow]No commands found matching criteria.[/yellow]")
         return
 
-    # Slice (Count) - Get last N
     final_list = filtered_list
     if count.lower() != "all":
         try:
@@ -146,18 +128,17 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
         except:
             final_list = filtered_list[-10:]
 
-    # --- RENDER ---
     if mode == "saved":
         cols = [
             ("ID", "cyan", "right"),
             ("Var", "bold white", "left"),
-            ("Command", "bold green", "left")
+            ("Command", "green", "left")
         ]
         title = f"Saved Commands ({len(final_list)}/{total_found})"
     else:
         cols = [
             ("ID", "cyan", "right"),
-            ("Command", "bold green ", "left")
+            ("Command", "green", "left")
         ]
         title = f"History ({len(final_list)}/{total_found})"
 
@@ -166,7 +147,6 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
     if list_only:
         return
 
-    # --- COPY INTERACTION ---
     try:
         choice = click.prompt("Copy (ID)", default="", show_default=False)
         if not choice: return
@@ -174,7 +154,7 @@ def _filter_and_display(commands: list, count: str, exclude: str, filter: str, l
         if choice in display_map:
             command_to_copy = display_map[choice]
             pyperclip.copy(command_to_copy)
-            console.print(f"[bold green]✔ Copied command #{choice}->[/bold green] [cyan]{command_to_copy}[/cyan]")
+            console.print(f"[bold green]✔ Copied command #{choice}->[/bold green][cyan]{command_to_copy}[/cyan]")
         else:
             console.print("[red]Invalid number.[/red]")
     except:
@@ -198,7 +178,7 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode,
     """
     manager = StorageManager()
 
-    # --- 1. HISTORY MODES (System or Local) ---
+    # --- 1. HISTORY MODES ---
     if hist_flag or active_flag:
         if id_flag or name_or_id or show_flag:
             console.print("[red]Error: Cannot mix history flags with specific ID/Name selection.[/red]")
@@ -210,7 +190,7 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode,
         _filter_and_display(commands_list, count, exclude, filter, list_mode, mode="history")
         return
 
-    # --- 2. SAVED COMMANDS (List/Interactive) ---
+    # --- 2. SAVED COMMANDS ---
     data_obj = manager.load_saved_cmds()
     commands = data_obj.get("commands", [])
 
@@ -218,7 +198,7 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode,
         _filter_and_display(commands, count, exclude, filter, list_mode, mode="saved")
         return
 
-    # --- 3. SINGLE FETCH (Name or ID) ---
+    # --- 3. SINGLE FETCH ---
     command_to_get = None
 
     if id_flag is not None:
@@ -227,13 +207,11 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode,
                 command_to_get = cmd.get("cmd")
                 break
     elif name_or_id is not None:
-        # Check by Var Name
         for cmd in commands:
             if cmd.get("var") == name_or_id:
                 command_to_get = cmd.get("cmd")
                 break
         
-        # Check by ID (if user typed "1" as argument)
         if not command_to_get and name_or_id.isdigit():
             tid = int(name_or_id)
             for cmd in commands:
@@ -249,4 +227,4 @@ def get_cmd(name_or_id, id_flag, show_flag, list_mode,
         console.print(command_to_get)
     else:
         pyperclip.copy(command_to_get)
-        console.print(f"[bold green]✔ Copied to clipboard![/bold green]")
+        console.print(f"[bold green]✔ Copied to clipboard![/bold green]->[cyan]{command_to_get}[/cyan]")
