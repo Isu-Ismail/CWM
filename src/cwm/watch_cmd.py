@@ -1,4 +1,5 @@
 import click
+import pyperclip
 from pathlib import Path
 from rich.console import Console  
 from .storage_manager import StorageManager
@@ -24,24 +25,39 @@ def start():
     """Injects a hook into your shell to record commands locally."""
     manager = StorageManager()
 
+    # 1. Setup Checks
+    if manager.local_bank is None:
+        console.print("[red]✖ Error: You are not in a project root.[/red]")
+        console.print("  Run 'cwm watch start' from the folder containing .cwm/")
+        return
+
     shell_type = detect_shell()
-    console.print(f"Detected shell: [cyan]{shell_type}[/cyan]")
+    # console.print(f"Detected shell: [cyan]{shell_type}[/cyan]") # Optional verbosity
 
     hist_file = manager.get_project_history_path()
+    if not hist_file:
+         # Fallback if get_project_history_path fails (unlikely if local_bank exists)
+         hist_file = manager.local_bank / "project_history.txt"
+
     project_root = hist_file.parent
 
     ext = get_shell_extension(shell_type)
     hook_file_path = project_root / f"cwm_hook{ext}"
 
+    # 2. Generate Hook
     try:
         hook_content = generate_hook_script(shell_type, hist_file)
     except Exception as e:
         console.print(f"[red]Error generating hook:[/red] {e}")
         return
 
-    project_root.mkdir(parents=True, exist_ok=True)
+    # 3. Write Hook File
+    if not project_root.exists():
+        project_root.mkdir(parents=True, exist_ok=True)
+    
     hook_file_path.write_text(hook_content, encoding="utf-8")
 
+    # 4. Install & Copy
     try:
         profile_path = install_hook(shell_type, hook_file_path)
 
@@ -52,11 +68,25 @@ def start():
             "started_at": manager._now()
         })
 
+        # --- COPY RELOAD COMMAND ---
+        reload_cmd = ""
+        if "powershell" in shell_type.lower() or "pwsh" in shell_type.lower():
+            reload_cmd = ". $PROFILE"
+        else:
+            # Convert /home/user/... to ~/.bashrc for cleaner display
+            clean_prof = str(profile_path).replace(str(Path.home()), "~")
+            reload_cmd = f"source {clean_prof}"
+            
+        pyperclip.copy(reload_cmd)
+
+        # --- OUTPUT ---
         console.print(f"[bold green]✔ Watch session started![/bold green]")
         console.print(f"  Hook saved to: [dim]{hook_file_path.name}[/dim]")
         console.print(f"  Profile updated: [dim]{profile_path}[/dim]")
-        console.print(
-            "[yellow]⚠ Please restart your terminal (or run '. $PROFILE') to begin recording.[/yellow]")
+        
+        console.print(f"\n  [bold cyan]ℹ Reload command copied to clipboard![/bold cyan]")
+        console.print(f"  [dim]Paste and run:[/dim] [white on black] {reload_cmd} [/white on black]")
+        console.print(f"  [dim](Or restart your terminal)[/dim]")
 
     except Exception as e:
         console.print(f"[red]Failed to install hook:[/red] {e}")
@@ -107,5 +137,3 @@ def status():
         console.print(f"Started at: {session.get('started_at')}")
     else:
         console.print("[dim]Watch session INACTIVE[/dim]")
-
-
