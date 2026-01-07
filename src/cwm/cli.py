@@ -43,10 +43,15 @@ COMMAND_MAP = {
     "clear":   (".clear_cmd", "clear_cmd", "Clear/clean history & data"),
     "setup":   (".setup_cmd", "setup_cmd", "Install shell hooks"),
     "ask":     (".ask_cmd", "ask_cmd", "Ask AI for command help"),
+    "kill":    (".kill_cmd","kill_cmd","Kill the process in the specific port"),
+    "wifi":    (".wifi_cmd","wifi_cmd","shows password of the connected wifi"),
+    "tmux": (".tmux_cmd", "tmux_cmd", "Manage tmux project sessions"),
+    "cdf": (".cdf_cmd", "cdf_cmd", "Fast directory navigation with fuzzy search"),
+
 }
 
 CATEGORIES = {
-    "Workspace & Navigation": ["project", "jump", "group", "run"],
+    "Workspace & Navigation": ["project", "jump", "group", "run","cdf"],
     "Core & Configuration":   ["init", "hello", "config", "setup"],
     "History & Storage":      ["save", "get", "clear", "bank"],
     "Tools & Utilities":      ["ask", "git", "copy", "watch"],

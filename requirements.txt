@@ -4,3 +4,4 @@ click
 colorama
 pyperclip
 pathspec
+psutil

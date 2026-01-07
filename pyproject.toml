@@ -31,7 +31,9 @@ dependencies = [
     "rich",           
     "pyperclip",
     "pathspec",
-    "psutil"
+    "psutil",
+    "SQLAlchemy",
+    "autopep8",
     
 ]
 
